@@ -68,8 +68,8 @@ type inst struct {
 	flag bool
 	r    rune
 	set  *charSet
-	// lit and lit16 are the literal run of an opLit, in UTF-8 and in UTF-16.
-	lit   []byte
+	// lit8 and lit16 are the literal run of an opLit, in UTF-8 and in UTF-16.
+	lit8  []byte
 	lit16 []uint16
 	// back is, for an opRep, the ASCII bytes (up to three) what follows it can start with, when those are all it can
 	// start with: its give-back looks for them with a search back (see setBack).
@@ -80,13 +80,13 @@ type inst struct {
 	a, b int32
 	// min and max bound a repetition. A max of -1 is no bound.
 	min, max int32
-	// need is the least number of bytes of text that every way from this instruction to a match consumes going
+	// need8 is the least number of bytes of text that every way from this instruction to a match consumes going
 	// forward (see setNeeds). It is set for an opLoop, and counts none of the iterations the loop has still to make.
 	// need16 is the same in UTF-16 code units.
-	need, need16 int32
-	// iter is the least number of bytes one iteration of the body of an opLoop consumes going forward, and iter16 the
+	need8, need16 int32
+	// iter8 is the least number of bytes one iteration of the body of an opLoop consumes going forward, and iter16 the
 	// least number of UTF-16 code units.
-	iter, iter16 int32
+	iter8, iter16 int32
 	// m is the number of the instruction's memo point, counted from 1, or 0 when it has none (see memoPoint). It is
 	// set for an opSplit, an opLoop, an opRep and an opRepLazy.
 	m int32
@@ -125,8 +125,8 @@ type program struct {
 	units bool
 	// anchored says every match starts at the start of the text.
 	anchored bool
-	// need is the least number of bytes a match consumes (see setNeeds), and need16 of UTF-16 code units.
-	need, need16 int
+	// need8 is the least number of bytes a match consumes (see setNeeds), and need16 of UTF-16 code units.
+	need8, need16 int
 	// points are the memo points of the program (see memoPoint).
 	points []memoPoint
 	// quick says, for each instruction, which characters can come next on a way from it to the end of its match (see
@@ -187,7 +187,7 @@ func compileProgram(root *node, unicode bool, groups int) *program {
 		loops:    c.loops,
 		units:    !unicode,
 		anchored: startsAtBol(root),
-		need:     need,
+		need8:    need,
 		need16:   need16,
 		points:   c.points,
 		quick:    q,
@@ -449,7 +449,7 @@ func (c *compiler) emit(n *node, back bool) {
 				j++
 			}
 			if j-i >= 2 {
-				c.add(inst{op: opLit, lit: lit, lit16: utf16.Encode([]rune(string(lit)))})
+				c.add(inst{op: opLit, lit8: lit, lit16: utf16.Encode([]rune(string(lit)))})
 				i = j
 				continue
 			}
@@ -619,7 +619,7 @@ func (c *compiler) emitRepeat(n *node, back bool) {
 	if simple {
 		point = c.point()
 	}
-	loop := c.add(inst{op: opLoop, a: k, min: minC, max: maxC, flag: n.lazy, iter: int32(iter), iter16: int32(iter16), m: point})
+	loop := c.add(inst{op: opLoop, a: k, min: minC, max: maxC, flag: n.lazy, iter8: int32(iter), iter16: int32(iter16), m: point})
 	c.add(inst{op: opLoopIter, a: k})
 	c.open = append(c.open, loopContext{loop: k, min: minC, simple: simple})
 	c.emitBody(body, back, lo, hi, clear)
@@ -750,7 +750,7 @@ func needsIn(insts []inst, utf8set bool) (int, int) {
 				next(after, 1)
 			case opLit:
 				if utf8set {
-					next(after, int64(len(i.lit)))
+					next(after, int64(len(i.lit8)))
 				} else {
 					next(after, int64(len(i.lit16)))
 				}
@@ -784,7 +784,7 @@ func needsIn(insts []inst, utf8set bool) (int, int) {
 				loop := &insts[pc+1]
 				iter := loop.iter16
 				if utf8set {
-					iter = loop.iter
+					iter = loop.iter8
 				}
 				next(after, timesNeed(int64(loop.min), int64(iter)))
 			default:
@@ -799,7 +799,7 @@ func needsIn(insts []inst, utf8set bool) (int, int) {
 	for pc := range insts {
 		if insts[pc].op == opLoop {
 			if utf8set {
-				insts[pc].need = need[pc]
+				insts[pc].need8 = need[pc]
 			} else {
 				insts[pc].need16 = need[pc]
 			}
@@ -905,7 +905,7 @@ func quicks(insts []inst) ([]quick, int) {
 			case opSet:
 				n.addSet(i.set)
 			case opLit:
-				n.addRune(rune(i.lit[0]))
+				n.addRune(rune(i.lit8[0]))
 			case opRep, opRepLazy:
 				if i.set != nil {
 					n.addSet(i.set)

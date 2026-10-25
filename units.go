@@ -1,5 +1,10 @@
 package ecmaregex
 
+import (
+	"bytes"
+	"slices"
+)
+
 // Reading UTF-8 and UTF-16, and matching by UTF-16 code unit over UTF-8 text (units.rs).
 //
 // ECMA-262 matches a pattern that has no u flag a code unit at a time. A character of one, two or three bytes of
@@ -364,3 +369,24 @@ func advance16(input []uint16, pos int, unicode bool) int {
 func isWordUnit(c uint32) bool {
 	return c < 0x80 && isWordByte(byte(c))
 }
+
+// equal8 and equal16 report whether two runs of units are the same.
+func equal8(a, b []byte) bool    { return string(a) == string(b) }
+func equal16(a, b []uint16) bool { return slices.Equal(a, b) }
+
+// lastOfBack8 returns the position of the last of the ASCII bytes back in input[from:to], or from when there is none:
+// the give-back of a greedy single character loop (see setBack), which finds where what follows it can start.
+func lastOfBack8(input []byte, from, to int, back []byte) int {
+	run := input[from:to]
+	var found int
+	switch len(back) {
+	case 1:
+		found = bytes.LastIndexByte(run, back[0])
+	default:
+		found = bytes.LastIndexAny(run, string(back))
+	}
+	return from + max(found, 0)
+}
+
+// lastOfBack16 is never taken: the give-back search is over UTF-8 alone.
+func lastOfBack16(input []uint16, from, to int, back []byte) int { return to }
