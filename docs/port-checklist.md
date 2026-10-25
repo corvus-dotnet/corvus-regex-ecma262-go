@@ -117,5 +117,8 @@ with a small stack is enough; Go has no stack of a goroutine's own size, so this
 `tools/stackprobe` asks the engine about the patterns the crate's stack probe asks about (deep, wide and long, in every
 grammar, through every member over UTF-8 and UTF-16), each in a process of its own with the largest stack set to 1 GB
 and to 2 MB, the least at which the deepest pattern the engine reads (`MaxNesting` groups, and those past it, which are
-read to the limit) is answered or refused. It answers 964 probes as the crate's does: 1,122 answered, 1,770 refused, no
-fault. With the largest stack lowered to 1 MB, deep patterns from 200 groups on end the program.
+read to the limit) is answered or refused. On each stack it answers the 964 probes as the crate's does on each of its
+threads: 374 answered, 590 refused, no fault (748 and 1,180 over the two). With the largest stack lowered to 1 MB, 25
+probes end the program: those of 200 groups nested that are repeated or alternatives (a star, a counted or lazy
+repetition, an alternation, and a group with a backreference), in each grammar. The deeper probes of those kinds are
+refused, at 1 MB as at 2 MB.

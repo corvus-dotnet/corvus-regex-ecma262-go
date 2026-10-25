@@ -217,3 +217,24 @@ func TestBytes(t *testing.T) {
 		t.Error("a surrogate in UTF-8 is read as UTF-8")
 	}
 }
+
+// TestANegativeStartIsTheStart: a start below 0 is read as 0, as RegExpBuiltinExec reads a lastIndex below 0 (ToLength),
+// in every encoding and whatever search the pattern takes.
+func TestANegativeStartIsTheStart(t *testing.T) {
+	for _, c := range [][2]string{{`abc`, ""}, {`\w+`, ""}, {`[0-9]`, ""}, {"\\b\u0428\\b", "iu"}, {`x*`, ""}} {
+		re := MustCompile(c[0], c[1])
+		for _, s := range []string{"", "abc 1 \u0428", "zz"} {
+			want, _ := re.TryFindStringIndexAt(s, 0)
+			got, err := re.TryFindStringIndexAt(s, -3)
+			if err != nil || !slices.Equal(got, want) {
+				t.Errorf("/%s/%s over %q from -3: %v %v, want %v", c[0], c[1], s, got, err, want)
+			}
+			u := utf16.Encode([]rune(s))
+			want16, _ := re.TryFindUTF16Index(u, 0)
+			got16, err := re.TryFindUTF16SubmatchIndex(u, -3)
+			if err != nil || (got16 == nil) != (want16 == nil) || got16 != nil && !slices.Equal(got16[:2], want16) {
+				t.Errorf("/%s/%s over UTF-16 %q from -3: %v %v, want %v", c[0], c[1], s, got16, err, want16)
+			}
+		}
+	}
+}
