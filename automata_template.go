@@ -1,0 +1,174 @@
+//go:build ignore
+
+// The template of the readers of the automata of adfa.go, which internal/expand writes out for each encoding:
+// automata8_gen.go over UTF-8 bytes and automata16_gen.go over UTF-16 code units (see vm_template.go).
+
+package ecmaregex
+
+// startState_T returns the start state at start: where the pattern has no boundary or anchor that looks back, the one.
+func (a *anchoredDfa) startState_T(input []unit_T, start int) int {
+	if !a.context {
+		return a.starts[0]
+	}
+	k := 0
+	if start > 0 {
+		if c := input[start-1]; c < 0x80 && isWordByte(byte(c)) {
+			k = 2
+		}
+	} else {
+		k = 1
+	}
+	return a.starts[k]
+}
+
+// find_T returns where the match that starts at start ends, or adfaNone where no match starts there, or adfaBail where
+// a unit beyond ASCII was reached and the backtracking matcher decides.
+func (a *anchoredDfa) find_T(input []unit_T, start int) int {
+	s := a.startState_T(input, start)
+	if s == adfaDead {
+		return adfaNone
+	}
+	// The state is kept premultiplied by the stride, so a step is one load and an add.
+	return a.run_T(input, start, uint32(s)<<a.shift)
+}
+
+// run_T reads the automaton from the row at from: the end of the last match found, or adfaNone or adfaBail.
+func (a *anchoredDfa) run_T(input []unit_T, from int, at uint32) int {
+	last := adfaNone
+	trans, classOf := a.fast, &a.classOf
+	p := from
+	for ; p < len(input); p++ {
+		c := input[p]
+		if c >= 0x80 {
+			return adfaBail
+		}
+		t := trans[at+uint32(classOf[c])]
+		if t&fastMatched != 0 {
+			last = p
+		}
+		at = t &^ fastMatched
+		if at == 0 {
+			return last
+		}
+	}
+	if a.atEnd[at>>a.shift] {
+		return p
+	}
+	return last
+}
+
+// findAfter_T is find_T from start where the units from start to from are a prefix whose states after gave.
+func (a *anchoredDfa) findAfter_T(input []unit_T, start, from int, rows *[4]uint32) int {
+	k := 0
+	if a.context {
+		if start > 0 {
+			if c := input[start-1]; c < 0x80 && isWordByte(byte(c)) {
+				k = 2
+			}
+		} else {
+			k = 1
+		}
+	}
+	row := rows[k]
+	if row == 0 {
+		return adfaNone
+	}
+	return a.run_T(input, from, row)
+}
+
+// matchesAt_T reports whether any match starts at start, found at the first place one ends: 1 or 0, or adfaBail when
+// a unit beyond ASCII is reached first.
+func (a *anchoredDfa) matchesAt_T(input []unit_T, start int) int {
+	s := a.startState_T(input, start)
+	if s == adfaDead {
+		return 0
+	}
+	trans, classOf := a.fast, &a.classOf
+	at := uint32(s) << a.shift
+	for p := start; p < len(input); p++ {
+		c := input[p]
+		if c >= 0x80 {
+			return adfaBail
+		}
+		t := trans[at+uint32(classOf[c])]
+		if t&fastMatched != 0 {
+			return 1
+		}
+		at = t
+		if at == 0 {
+			return 0
+		}
+	}
+	if a.atEnd[at>>a.shift] {
+		return 1
+	}
+	return 0
+}
+
+// scan_T reads the forward automaton from a start state at from, and returns the first place at or after from where a
+// match ends (scanMatch), or where a start state is reached again first, so that no match starts before it (scanIdle),
+// or the unit beyond ASCII reached first (scanBail); scanNone at the end of the text with no match.
+func (a *anchoredDfa) scan_T(input []unit_T, from int) (int, int) {
+	shift := a.shift
+	row := uint32(a.startState_T(input, from)) << shift
+	trans, classOf, startLike := a.fast, &a.classOf, a.startLike
+	p := from
+	for p < len(input) {
+		c := input[p]
+		if c >= 0x80 {
+			return scanBail, p
+		}
+		t := trans[row+uint32(classOf[c])]
+		if t&fastMatched != 0 {
+			return scanMatch, p
+		}
+		row = t
+		p++
+		if startLike[row>>shift] {
+			return scanIdle, p
+		}
+	}
+	if a.atEnd[row>>shift] {
+		return scanMatch, p
+	}
+	return scanNone, p
+}
+
+// starts_T returns the starts before q, as a mask of their distances (bit d of lo, hi is the start q - d), that the
+// terms allow, looking no further back than most units nor before floor; false when a unit beyond ASCII is reached.
+func (r *reverseDfa) starts_T(input []unit_T, q, most, floor int) (lo, hi uint64, ok bool) {
+	if r.acceptFirst {
+		lo = 1
+	}
+	at := uint32(1) << r.shift
+	fast, classOf := r.fast, &r.classOf
+	reach := min(most, max(q-floor, 0))
+	for d := 1; d <= reach; d++ {
+		c := input[q-d]
+		if c >= 0x80 {
+			return 0, 0, false
+		}
+		t := fast[at+uint32(classOf[c])]
+		if t == 0 {
+			break
+		}
+		if t&fastMatched != 0 {
+			if d < 64 {
+				lo |= 1 << d
+			} else {
+				hi |= 1 << (d - 64)
+			}
+		}
+		at = t &^ fastMatched
+	}
+	return lo, hi, true
+}
+
+// skipAhead_T returns the first place at or after at that the window does not rule out: one unit read rules out the
+// starts of a window none of whose positions it can be.
+func (s *skipWin) skipAhead_T(input []unit_T, at int) int {
+	for at+s.hi < len(input) && !s.hit(int(input[at+s.hi])) {
+		at += s.len
+	}
+	return at
+}

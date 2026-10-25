@@ -3,9 +3,10 @@
 package ecmaregex
 
 // exec16 finds the first match at or after start (at start alone with sticky), with the pattern's timeout. When slots
-// is given it receives the start and end of the match and of each group, -1 for a group that did not take part.
+// is given it receives the start and end of the match and of each group, -1 for a group that did not take part. A
+// start below 0 is 0, as RegExpBuiltinExec reads a lastIndex below 0.
 func (re *Regexp) exec16(input []uint16, start int, sticky bool, slots []int) (from, to int, found bool, err error) {
-	start = normalize16(input, start, re.unicode())
+	start = normalize16(input, max(start, 0), re.unicode())
 	if slots == nil {
 		return re.prog.exec16(input, start, sticky, re.timeout, nil)
 	}

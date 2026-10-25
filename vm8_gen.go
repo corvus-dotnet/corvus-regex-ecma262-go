@@ -2,13 +2,21 @@
 
 package ecmaregex
 
-import "time"
+import (
+	"math/bits"
+	"time"
+)
 
 // exec8 finds the first match at or after start (at start alone with sticky), and returns where it starts and ends,
 // with found false for no match. When it finds one and caps is given, caps receives the start and end of each group
 // the program records, or -1 for a group that did not take part. With a limit the match is abandoned when it has run
 // for longer than that, or when its stack has reached MaxStack, and the error says which.
 func (p *program) exec8(input []byte, start int, sticky bool, limit time.Duration, caps []int) (from, to int, found bool, err error) {
+	// A pattern of a simple shape with no group is answered by the search alone, with nothing of the matcher's.
+	if p.groups == 0 && !sticky && !p.anchored && p.search.shape != shapeNone {
+		from, to, found = p.shapeSearch8(input, start)
+		return from, to, found, nil
+	}
 	st := states.Get().(*state)
 	st.reset(p, len(input), limit)
 	from, found = p.search8(st, input, start, sticky)
@@ -37,39 +45,571 @@ func (p *program) search8(st *state, input []byte, start int, sticky bool) (int,
 		}
 		return start, p.run8(st, input, start)
 	}
+	switch p.search.plan {
+	case planWindows:
+		return p.searchWindows8(st, input, start, need)
+	case planAfterLoops:
+		return p.searchAfterLoops8(st, input, start, need)
+	}
 	return p.scan8(st, input, start, need)
 }
 
-// scan8 tries every position from start that the first set allows, until one matches.
-func (p *program) scan8(st *state, input []byte, start, need int) (int, bool) {
+// widthAt8 returns the width of the character at a position before the end.
+func (p *program) widthAt8(input []byte, at int) int {
+	if input[at] < 0x80 {
+		return 1
+	}
+	_, w := read8(input, at, p.units)
+	return w
+}
+
+// shapeSearch8 returns the first match at or after start of a pattern of a simple shape.
+func (p *program) shapeSearch8(input []byte, start int) (int, int, bool) {
+	s := p.search
+	if start > len(input) || len(input)-start < p.need8 {
+		return 0, 0, false
+	}
+	switch s.shape {
+	case shapeLiterals:
+		from, to := s.literals.find8(input, start)
+		return from, to, from >= 0
+	case shapeForms:
+		return p.formsMatch8(input, start)
+	case shapeSet:
+		at, w := p.nextMember8(s.shapeSet, input, start)
+		return at, at + w, at >= 0
+	}
+	return p.loopMatch8(input, start)
+}
+
+// formsMatch8 returns the first match at or after start of the shape of an alternation of literals with forms.
+func (p *program) formsMatch8(input []byte, start int) (int, int, bool) {
+	s := p.search
+	units := p.units
+	for next := start; ; {
+		q, _ := s.literals.find8(input, next)
+		if q < 0 {
+			return 0, 0, false
+		}
+		// The automaton compares several alternatives at once where the text is ASCII; one is compared faster as it
+		// is.
+		if dfa := p.anchoredDfa; dfa != nil && len(s.forms) > 1 {
+			end := dfa.find8(input, q)
+			if end >= 0 {
+				return q, end, true
+			}
+			if end == adfaNone {
+				next = q + p.widthAt8(input, q)
+				continue
+			}
+		}
+	alternatives:
+		for _, alt := range s.forms {
+			at := q
+			for _, f := range alt {
+				if at >= len(input) {
+					continue alternatives
+				}
+				r, w := rune(input[at]), 1
+				if input[at] >= 0x80 {
+					r, w = read8(input, at, units)
+				}
+				has := false
+				for _, x := range f {
+					has = has || x == r
+				}
+				if !has {
+					continue alternatives
+				}
+				at += w
+			}
+			return q, at, true
+		}
+		next = q + p.widthAt8(input, q)
+	}
+}
+
+// loopMatch8 returns the first match at or after start of the shape of one greedy loop of a class.
+func (p *program) loopMatch8(input []byte, start int) (int, int, bool) {
+	s := p.search
+	from := start
+	if s.shapeMin != 0 {
+		at, _ := p.nextMember8(s.shapeSet, input, start)
+		if at < 0 {
+			return 0, 0, false
+		}
+		from = at
+	}
+	to := s.runEnd8(input, from)
+	if to < 0 {
+		to = p.endOfRun8(s.shapeSet, input, from)
+	}
+	return from, to, true
+}
+
+// nextMember8 returns the first member of the set at or after at and its width, or -1.
+func (p *program) nextMember8(set *charSet, input []byte, at int) (int, int) {
+	for {
+		at = p.firstFind8(input, at)
+		if at < 0 || at >= len(input) {
+			return -1, 0
+		}
+		if c := input[at]; c < 0x80 {
+			if set.hasASCII(byte(c)) {
+				return at, 1
+			}
+			at++
+		} else {
+			r, w := read8(input, at, p.units)
+			if set.contains(r) {
+				return at, w
+			}
+			at += w
+		}
+	}
+}
+
+// firstAllows8 reports whether a start passes the first set.
+func (p *program) firstAllows8(input []byte, at int) bool {
+	first := p.first
+	if first == nil {
+		return true
+	}
+	if at >= len(input) {
+		return false
+	}
+	if c := input[at]; c < 0x80 {
+		return first.hasASCII(byte(c))
+	}
+	r, _ := read8(input, at, p.units)
+	return first.contains(r)
+}
+
+// tryAt8 reports whether the program matches at the start, with the reason for stopping in st.stop.
+func (p *program) tryAt8(st *state, input []byte, at int) bool {
+	return p.firstAllows8(input, at) && p.run8(st, input, at)
+}
+
+// rulesOut8 reports whether nothing from the occurrence at q on can match, by the check's automaton while it pays.
+func rulesOut8(r *restCheck, input []byte, q int) bool {
+	if r == nil || !r.pays() {
+		return false
+	}
+	out := r.dfa.matchesAt8(input, q) == 0
+	r.count(out)
+	return out
+}
+
+// walkBack8 returns the position n characters before at, not before floor (the furthest it gets when there are
+// fewer), and the characters it went back over.
+func (p *program) walkBack8(input []byte, at, n, floor int) (int, int) {
+	k := 0
+	for k < n && at > floor {
+		_, w := readLast8(input, at, p.units)
+		if at-w < floor {
+			break
+		}
+		at -= w
+		k++
+	}
+	return at, k
+}
+
+// searchWindows8 is the search of a pattern each of whose matches holds one of the literals lo to hi characters
+// after its start: each occurrence opens the window of starts that could reach it, tried in order and never twice.
+func (p *program) searchWindows8(st *state, input []byte, start, need int) (int, bool) {
+	s := p.search
+	if s.reverse != nil && s.hi < 127 {
+		if at, found, decided := p.searchReverse8(st, input, start, need); decided {
+			return at, found
+		}
+	}
+	length := len(input)
+	lo, hi := s.lo, s.hi
+	next := start
+	// Every start before this has been tried.
+	untried := start
+	for {
+		q, _ := s.literals.find8(input, next)
+		if q < 0 {
+			return 0, false
+		}
+		next = q + p.widthAt8(input, q)
+		if hi == 0 {
+			// Every alternative starts with its literal: the match starts at the occurrence or not at all.
+			if length-q < need {
+				return 0, false
+			}
+			// The occurrence is the literal every match starts with: the automaton goes on after it.
+			end := p.afterFind8(input, q)
+			if end >= 0 {
+				st.end = end
+				return q, true
+			}
+			if end == adfaNone {
+				continue
+			}
+			if p.tryAt8(st, input, q) {
+				return q, true
+			}
+			if st.stop != stopNone {
+				return 0, false
+			}
+			continue
+		}
+		last, k := p.walkBack8(input, q, lo, start)
+		if k < lo || last < untried || rulesOut8(s.rest, input, q) {
+			continue
+		}
+		at, _ := p.walkBack8(input, q, hi, start)
+		for at <= last {
+			if at >= untried {
+				if length-at < need {
+					return 0, false
+				}
+				if p.tryAt8(st, input, at) {
+					return at, true
+				}
+				if st.stop != stopNone {
+					return 0, false
+				}
+			}
+			if at == length {
+				break
+			}
+			at += p.widthAt8(input, at)
+		}
+		untried = max(untried, at)
+	}
+}
+
+// searchReverse8 is searchWindows8 with the terms before the anchors read backwards from each occurrence, so that
+// only the starts they allow are tried; decided is false when a unit beyond ASCII is reached, for the plain search to
+// be made. A start is tried only once no later occurrence could allow an earlier one (it is before the next
+// occurrence's window), so the starts are tried in order across occurrences and the first match is the leftmost.
+func (p *program) searchReverse8(st *state, input []byte, start, need int) (at int, found, decided bool) {
+	s := p.search
+	lo, hi := s.lo, s.hi
+	length := len(input)
+	// The starts waiting to be tried, as two words of bits: bit k is the position base + k.
+	var pend0, pend1 uint64
+	base := start
+	// Every start at or before this has been tried, or can no longer be allowed.
+	tried := -1
+	q, _ := s.literals.find8(input, start)
+	if q < 0 {
+		return 0, false, true
+	}
+	for {
+		// The starts this occurrence's terms allow join those waiting.
+		if newBase := max(q-hi, start); newBase > base {
+			shift := uint(newBase - base)
+			switch {
+			case shift >= 128:
+				pend0, pend1 = 0, 0
+			case shift >= 64:
+				pend0, pend1 = pend1>>(shift-64), 0
+			default:
+				pend0, pend1 = pend0>>shift|pend1<<(64-shift), pend1>>shift
+			}
+			base = newBase
+		}
+		// An occurrence from which nothing can match allows no start.
+		var m0, m1 uint64
+		if !rulesOut8(s.rest, input, q) {
+			var ok bool
+			if m0, m1, ok = s.reverse.starts8(input, q, hi, start); !ok {
+				return 0, false, false
+			}
+		}
+		// No start nearer than lo characters.
+		if lo >= 64 {
+			m0, m1 = 0, m1&(^uint64(0)<<(lo-64))
+		} else if lo > 0 {
+			m0 &= ^uint64(0) << lo
+		}
+		for m0|m1 != 0 {
+			var d int
+			if m1 != 0 {
+				d = 127 - bits.LeadingZeros64(m1)
+				m1 &^= 1 << (d - 64)
+			} else {
+				d = 63 - bits.LeadingZeros64(m0)
+				m0 &^= 1 << d
+			}
+			if at := q - d; at >= base && at > tried {
+				if b := at - base; b < 64 {
+					pend0 |= 1 << b
+				} else {
+					pend1 |= 1 << (b - 64)
+				}
+			}
+		}
+		after := q + p.widthAt8(input, q)
+		// The earliest waiting start is tried once no occurrence before it plus the window could allow an earlier
+		// one: an occurrence within that reach is taken in first, which looks no further than the reach.
+		taken := false
+		for pend0|pend1 != 0 {
+			k := 64 + bits.TrailingZeros64(pend1)
+			if pend0 != 0 {
+				k = bits.TrailingZeros64(pend0)
+			}
+			at := base + k
+			if after <= at+hi {
+				if q2 := s.literals.findWithin8(input, after, at+hi); q2 >= 0 {
+					q, taken = q2, true
+					break
+				}
+			}
+			if k < 64 {
+				pend0 &^= 1 << k
+			} else {
+				pend1 &^= 1 << (k - 64)
+			}
+			tried = at
+			if length-at < need {
+				return 0, false, true
+			}
+			if p.tryAt8(st, input, at) {
+				return at, true, true
+			}
+			if st.stop != stopNone {
+				return 0, false, true
+			}
+		}
+		if !taken {
+			if q, _ = s.literals.find8(input, after); q < 0 {
+				return 0, false, true
+			}
+		}
+	}
+}
+
+// searchAfterLoops8 is the search of a pattern each of whose matches is runs of the loops' sets, then the literal:
+// the runs before each occurrence are walked back to the earliest start, which is tried. From that start the loops
+// reach every place a later start of the run could, so the later starts fail with it; the occurrence itself is not in
+// the run and may start a match, so it is tried next where every loop may be empty, and is the floor for the walk back
+// from later occurrences otherwise. A start before an occurrence can reach a later one through it (the literal can be
+// in a loop's set), so an occurrence ruled out does not move the floor.
+func (p *program) searchAfterLoops8(st *state, input []byte, start, need int) (int, bool) {
+	s := p.search
+	sets, mins := s.sets, s.mins
 	length := len(input)
 	units := p.units
-	for at := start; ; {
+	next := start
+	// The floor below which no start is tried again.
+	low := start
+	allEmpty := true
+	for _, m := range mins {
+		allEmpty = allEmpty && m == 0
+	}
+occurrences:
+	for {
+		q, _ := s.literals.find8(input, next)
+		if q < 0 {
+			return 0, false
+		}
+		next = q + p.widthAt8(input, q)
+		// A loop that needs a member must have one just before the occurrence: a test of one character, made before
+		// the rest is checked.
+		last := len(sets) - 1
+		if mins[last] == 1 {
+			if q <= low {
+				continue
+			}
+			r := rune(input[q-1])
+			if r >= 0x80 {
+				r, _ = readLast8(input, q, units)
+			}
+			if !sets[last].contains(r) {
+				continue
+			}
+		}
+		if rulesOut8(s.rest, input, q) {
+			continue
+		}
+		at := q
+		for k := len(sets) - 1; k >= 0; k-- {
+			runEnd := at
+			for at > low {
+				r, w := rune(input[at-1]), 1
+				if r >= 0x80 {
+					r, w = readLast8(input, at, units)
+				}
+				if !sets[k].contains(r) || at-w < low {
+					break
+				}
+				at -= w
+			}
+			if mins[k] == 1 && at == runEnd {
+				continue occurrences
+			}
+		}
 		if length-at < need {
 			return 0, false
 		}
-		if at == length {
-			return at, p.first == nil && p.run8(st, input, at)
-		}
-		r, w := rune(input[at]), 1
-		if input[at] >= 0x80 {
-			r, w = read8(input, at, units)
-		}
-		if (p.first == nil || p.first.contains(r)) && p.run8(st, input, at) {
+		if p.tryAt8(st, input, at) {
 			return at, true
 		}
 		if st.stop != stopNone {
 			return 0, false
 		}
+		if at < q {
+			// The occurrence itself (\b[0-9a-f]*ét over "0aét", where the walk back gives 0).
+			low = q
+			if allEmpty {
+				if length-q < need {
+					return 0, false
+				}
+				if p.tryAt8(st, input, q) {
+					return q, true
+				}
+				if st.stop != stopNone {
+					return 0, false
+				}
+				low = next
+			}
+		} else {
+			low = next
+		}
+		if len(sets) == 1 {
+			// Every occurrence in the rest of the loop's run walks back to the start just tried.
+			next = max(next, p.endOfRun8(sets[0], input, q))
+		}
+	}
+}
+
+// scan8 tries every start from start that the first set allows.
+func (p *program) scan8(st *state, input []byte, start, need int) (int, bool) {
+	length := len(input)
+	units := p.units
+	first := p.first
+	s := p.search
+	forward := p.forward()
+	skip := p.skip
+	for at := start; ; {
+		if skip != nil {
+			at = skip.skipAhead8(input, at)
+		}
+		// Every match starts with a member of the first set, which starts with one of the first bytes or units.
+		if at = p.firstFind8(input, at); at < 0 {
+			return 0, false
+		}
+		if length-at < need {
+			return 0, false
+		}
+		if at == length {
+			return at, first == nil && p.run8(st, input, at)
+		}
+		r, w := rune(input[at]), 1
+		if input[at] >= 0x80 {
+			r, w = read8(input, at, units)
+		}
+		if s.leadingWordBoundary && at > 0 && isWordUnit(uint32(input[at-1])) {
+			// Inside a word, where \b cannot hold: the rest of the word is passed over.
+			at = max(p.endOfRun8(first, input, at), at+w)
+			continue
+		}
+		if forward != nil {
+			// One pass of the forward automaton from here says where a match first ends, or that none starts before a
+			// place where no thread is alive; only then are starts tried, from here to there.
+			kind, place := forward.scan8(input, at)
+			if kind == scanNone {
+				return 0, false
+			}
+			if kind == scanIdle {
+				at = place
+				continue
+			}
+			found, next, over := p.tryStarts8(st, input, at, place)
+			if found || over {
+				return next, found
+			}
+			at = next
+			continue
+		}
+		if (first == nil || first.contains(r)) && p.run8(st, input, at) {
+			return at, true
+		}
+		if st.stop != stopNone {
+			return 0, false
+		}
+		if s.skipRun != nil && s.skipRun.contains(r) {
+			// The start failed after its leading loop ate the run from here: every start in the rest of the run
+			// fails the same way.
+			at = max(p.endOfRun8(s.skipRun, input, at+w), at+w)
+			continue
+		}
 		at += w
 	}
 }
 
-// run8 reports whether the program matches at the position start. It keeps its choices on an explicit stack, so the
-// depth of the search is bounded by memory and not by the stack of the goroutine. When it fails, every group and
-// counter is back to the value it had on entry. It counts its steps, and when a check says the match has reached a
-// limit it returns false with the reason in st.stop.
+// tryStarts8 tries the starts from at to last in order, as the plain search would: found with the start that matched,
+// over when the search is over without one, or else where the starts ran out.
+func (p *program) tryStarts8(st *state, input []byte, at, last int) (found bool, next int, over bool) {
+	length := len(input)
+	first := p.first
+	for at <= last && at <= length {
+		if !p.units && midPair8(input, at) {
+			at++
+			continue
+		}
+		if at == length {
+			if first == nil && p.run8(st, input, at) {
+				return true, at, false
+			}
+			return false, at, true
+		}
+		r, w := rune(input[at]), 1
+		if input[at] >= 0x80 {
+			r, w = read8(input, at, p.units)
+		}
+		if (first == nil || first.contains(r)) && p.run8(st, input, at) {
+			return true, at, false
+		}
+		if st.stop != stopNone {
+			return false, at, true
+		}
+		at += w
+	}
+	return false, at, false
+}
+
+// endOfRun8 returns the end of the run of members of the set from at.
+func (p *program) endOfRun8(set *charSet, input []byte, at int) int {
+	for at < len(input) {
+		if c := input[at]; c < 0x80 {
+			if !set.hasASCII(byte(c)) {
+				break
+			}
+			at++
+		} else {
+			r, w := read8(input, at, p.units)
+			if !set.contains(r) {
+				break
+			}
+			at += w
+		}
+	}
+	return at
+}
+
+// run8 reports whether the program matches at the position start: by the anchored automaton where the program has
+// one and the text it reads is ASCII, and otherwise by the matcher. The matcher keeps its choices on an explicit
+// stack, so the depth of the search is bounded by memory and not by the stack of the goroutine. When it fails, every
+// group and counter is back to the value it had on entry. It counts its steps, and when a check says the match has
+// reached a limit it returns false with the reason in st.stop.
 func (p *program) run8(st *state, input []byte, start int) bool {
+	if dfa := p.anchoredDfa; dfa != nil {
+		end := dfa.find8(input, start)
+		if end >= 0 {
+			st.end = end
+			return true
+		}
+		if end == adfaNone {
+			return false
+		}
+	}
 	stack := st.stack[:0]
 	matched := p.runOn8(st, &stack, input, start)
 	st.stack = stack

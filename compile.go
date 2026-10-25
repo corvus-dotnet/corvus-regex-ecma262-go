@@ -5,6 +5,7 @@ package ecmaregex
 
 import (
 	"slices"
+	"sync"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -135,6 +136,33 @@ type program struct {
 	// first is every code point a match can start with, or nil when a match can be empty or when the set is not
 	// known.
 	first *charSet
+	// search is how the search finds where a match can start (see search.go).
+	search *search
+	// anchoredDfa is the anchored automaton that finds where a match from a start ends, for a program that records no
+	// group and needs no backtracking (see adfa.go).
+	anchoredDfa *anchoredDfa
+	// forwardRoot is the tree of a pattern whose search tries every start its first set allows, from which the forward
+	// automaton (see buildForwardDfa) is built on the first search that wants it.
+	forwardRoot *node
+	forwardOnce sync.Once
+	forwardDfa  *anchoredDfa
+	// skip is, for the same patterns, the window of positions read one unit at a time before the first set is
+	// searched for (see skipWin).
+	skip *skipWin
+	// afterLiteral is, for a pattern every match of which starts with one literal (a window at distance 0 of one
+	// literal over UTF-8), the anchored automaton's states after it (see anchoredDfa.after), and afterLength its
+	// length: an occurrence goes on from there, its units not read again.
+	afterLiteral *[4]uint32
+	afterLength  int
+}
+
+// forward returns the forward automaton, built on the first search that wants it, or nil when there is none.
+func (p *program) forward() *anchoredDfa {
+	if p.forwardRoot == nil {
+		return nil
+	}
+	p.forwardOnce.Do(func() { p.forwardDfa = buildForwardDfa(p.forwardRoot) })
+	return p.forwardDfa
 }
 
 type compiler struct {
@@ -192,13 +220,43 @@ func compileProgram(root *node, unicode bool, groups int) *program {
 		points:   c.points,
 		quick:    q,
 	}
+	backrefs := len(referenced) > 0
+	if p.groups == 0 && !backrefs {
+		p.anchoredDfa = buildAdfa(root)
+	}
+	p.search = &search{}
 	if !p.anchored {
 		var pairs []rune
 		if nullable, known := firstChars(root, &pairs); known && !nullable {
 			p.first = newCharSet(pairs, false)
 		}
+		p.search = planSearch(root, backrefs, p.first, !unicode)
+		if p.search.plan == planWindows && p.search.hi == 0 && p.anchoredDfa != nil && p.search.literals.single8 != nil {
+			literal := p.search.literals.single8
+			if rows, ok := p.anchoredDfa.after(literal); ok {
+				p.afterLiteral, p.afterLength = &rows, len(literal)
+			}
+		}
+		if !noSearch.Load() && !backrefs && shallowerThan(root, 64) && p.search.plan == planScan &&
+			p.search.shape == shapeNone {
+			p.forwardRoot = root
+			p.skip = skipWindow(root)
+		}
 	}
 	return p
+}
+
+// shallowerThan reports whether a tree nests fewer than limit levels.
+func shallowerThan(n *node, limit int) bool {
+	if limit <= 0 {
+		return false
+	}
+	for _, s := range n.subs {
+		if !shallowerThan(s, limit-1) {
+			return false
+		}
+	}
+	return true
 }
 
 // simplify returns the tree with two rewrites, both of which V8 makes. Neither changes what the pattern matches or
