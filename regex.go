@@ -192,6 +192,11 @@ type Regexp struct {
 	caps     *program
 	info     *groupInfo
 	timeout  time.Duration
+	// regular says the pattern needs no backtracking and is small enough for a linear matcher (re2Cost), so a test from
+	// the start of a text can be answered by the automaton over ASCII (see dfa.go), built on the first such test.
+	regular bool
+	dfaOnce sync.Once
+	dfa     *dfa
 }
 
 // Compile compiles a pattern with flags written as new RegExp reads them, such as "giu", and the default match
@@ -227,12 +232,14 @@ func CompileFlags(pattern string, flags Flags, matchTimeout time.Duration) (*Reg
 		name := string(n.name)
 		info.names = append(info.names, groupInfoName{name: name, name16: utf16.Encode([]rune(name)), groups: n.groups})
 	}
+	regular := !ps.needsBacktracking && re2Cost(root) <= maxRe2Cost
 	return &Regexp{
 		pattern: pattern,
 		flags:   flags,
 		prog:    compileProgram(root, flags.Unicode || flags.UnicodeSets, -1),
 		info:    info,
 		timeout: max(matchTimeout, 0),
+		regular: regular,
 	}, nil
 }
 
@@ -311,6 +318,44 @@ func (re *Regexp) capsProgram() *program {
 	return re.caps
 }
 
+// automaton returns the automaton over ASCII of a regular pattern, or nil when it has none.
+func (re *Regexp) automaton() *dfa {
+	re.dfaOnce.Do(func() {
+		root, _, err := parseWith(re.pattern, re.flags.syntax())
+		if err == nil {
+			re.dfa = buildDfa(root)
+		}
+	})
+	return re.dfa
+}
+
+// test8 reports whether the pattern matches at or after start (at start alone with the y flag): from the start of an
+// ASCII text by the automaton where the pattern has one, and otherwise by the matcher.
+func (re *Regexp) test8(input []byte, start int) (bool, error) {
+	if start == 0 && !re.flags.Sticky && re.regular {
+		if d := re.automaton(); d != nil {
+			if matched, decided := d.isMatch8(input); decided {
+				return matched, nil
+			}
+		}
+	}
+	_, _, found, err := re.exec8(input, start, re.flags.Sticky, nil)
+	return found, err
+}
+
+// test16 is test8 over UTF-16 text.
+func (re *Regexp) test16(input []uint16, start int) (bool, error) {
+	if start == 0 && !re.flags.Sticky && re.regular {
+		if d := re.automaton(); d != nil {
+			if matched, decided := d.isMatch16(input); decided {
+				return matched, nil
+			}
+		}
+	}
+	_, _, found, err := re.exec16(input, start, re.flags.Sticky, nil)
+	return found, err
+}
+
 // bytesOf returns the bytes of a string, without a copy. Nothing writes to them.
 func bytesOf(s string) []byte { return unsafe.Slice(unsafe.StringData(s), len(s)) }
 
@@ -348,8 +393,7 @@ func (re *Regexp) TryMatchStringAt(s string, start int) (bool, error) {
 	if !utf8.ValidString(s) {
 		return false, errNotUTF8
 	}
-	_, _, found, err := re.exec8(bytesOf(s), start, re.flags.Sticky, nil)
-	return found, err
+	return re.test8(bytesOf(s), start)
 }
 
 // MatchString is TryMatchString, which panics when a match reaches a limit or the text is not UTF-8.
@@ -481,10 +525,7 @@ func (re *Regexp) Split(s string, limit int) []Piece { return must(re.TrySplit(s
 func (re *Regexp) TryMatchUTF16(u []uint16) (bool, error) { return re.TryMatchUTF16At(u, 0) }
 
 // TryMatchUTF16At reports whether the pattern matches the text from the code unit start.
-func (re *Regexp) TryMatchUTF16At(u []uint16, start int) (bool, error) {
-	_, _, found, err := re.exec16(u, start, re.flags.Sticky, nil)
-	return found, err
-}
+func (re *Regexp) TryMatchUTF16At(u []uint16, start int) (bool, error) { return re.test16(u, start) }
 
 // MatchUTF16 is TryMatchUTF16, which panics when a match reaches a limit.
 func (re *Regexp) MatchUTF16(u []uint16) bool { return must(re.TryMatchUTF16(u)) }

@@ -140,10 +140,7 @@ func (re *Regexp) TryCapturesUTF16(c *Captures, u []uint16, start int) (bool, er
 // The methods over a Text, which check nothing.
 
 // TryMatchText reports whether the pattern matches the text.
-func (re *Regexp) TryMatchText(t Text) (bool, error) {
-	_, _, found, err := re.exec8(bytesOf(t.s), 0, re.flags.Sticky, nil)
-	return found, err
-}
+func (re *Regexp) TryMatchText(t Text) (bool, error) { return re.test8(bytesOf(t.s), 0) }
 
 // MatchText is TryMatchText, which panics when a match reaches a limit.
 func (re *Regexp) MatchText(t Text) bool { return must(re.TryMatchText(t)) }
@@ -200,8 +197,7 @@ func (re *Regexp) TryMatch(b []byte) (bool, error) {
 	if !utf8.Valid(b) {
 		return false, errNotUTF8
 	}
-	_, _, found, err := re.exec8(b, 0, re.flags.Sticky, nil)
-	return found, err
+	return re.test8(b, 0)
 }
 
 // Match is TryMatch, which panics when a match reaches a limit or the bytes are not UTF-8.
