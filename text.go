@@ -275,3 +275,137 @@ func (re *Regexp) TryReplaceAll(src, template []byte) ([]byte, error) {
 func (re *Regexp) ReplaceAll(src, template []byte) []byte {
 	return must(re.TryReplaceAll(src, template))
 }
+
+// Matches is a global search that can be run again over another text, so that counting or reading the matches of
+// many texts allocates nothing once the working memory has grown. After an empty match the search moves on one
+// character, as matchAll does. A Matches is not safe for concurrent use.
+//
+//	m := re.NewMatches()
+//	c := re.NewCaptures()
+//	for m.ResetString(s); m.Next(c); {
+//		fmt.Println(c.Start(0), c.End(0))
+//	}
+type Matches struct {
+	re   *Regexp
+	in8  []byte
+	in16 []uint16
+	utf8 bool
+	// bad says the text is a string that is not UTF-8, which the search refuses when it starts.
+	bad  bool
+	at   int
+	done bool
+}
+
+// NewMatches returns a global search of the pattern, over no text until it is reset.
+func (re *Regexp) NewMatches() *Matches { return &Matches{re: re, done: true} }
+
+// ResetText starts the search over a text.
+func (m *Matches) ResetText(t Text) *Matches {
+	m.in8, m.in16, m.utf8, m.bad, m.at, m.done = bytesOf(t.s), nil, true, false, 0, false
+	return m
+}
+
+// ResetString starts the search over a string, which is checked to be UTF-8 when the search starts. A string that is
+// not UTF-8 makes TryNext return an error of kind ErrEncoding, and Next panic.
+func (m *Matches) ResetString(s string) *Matches {
+	m.ResetText(Text{s})
+	m.bad = !utf8.ValidString(s)
+	return m
+}
+
+// ResetUTF16 starts the search over UTF-16 text.
+func (m *Matches) ResetUTF16(u []uint16) *Matches {
+	m.in8, m.in16, m.utf8, m.bad, m.at, m.done = nil, u, false, false, 0, false
+	return m
+}
+
+// TryNext finds the next match into c, and reports whether there was one.
+func (m *Matches) TryNext(c *Captures) (bool, error) {
+	if m.done {
+		c.found = false
+		return false, nil
+	}
+	if m.bad {
+		m.done, c.found = true, false
+		return false, errNotUTF8
+	}
+	var from, to int
+	var found bool
+	var err error
+	if m.utf8 {
+		from, to, found, err = m.re.exec8(m.in8, m.at, m.re.flags.Sticky, c.of(m.re))
+	} else {
+		from, to, found, err = m.re.exec16(m.in16, m.at, m.re.flags.Sticky, c.of(m.re))
+	}
+	c.found = found && err == nil
+	if !c.found {
+		m.done = true
+		return false, err
+	}
+	m.step(from, to)
+	return true, nil
+}
+
+// Next is TryNext, which panics when a match reaches a limit or the text is not UTF-8.
+func (m *Matches) Next(c *Captures) bool { return must(m.TryNext(c)) }
+
+// TryNextIndex finds the next match and returns where it starts and ends, with false when there is none. It asks for
+// no group, so a pattern can take a faster way.
+func (m *Matches) TryNextIndex() (int, int, bool, error) {
+	if m.done {
+		return 0, 0, false, nil
+	}
+	if m.bad {
+		m.done = true
+		return 0, 0, false, errNotUTF8
+	}
+	var from, to int
+	var found bool
+	var err error
+	if m.utf8 {
+		from, to, found, err = m.re.exec8(m.in8, m.at, m.re.flags.Sticky, nil)
+	} else {
+		from, to, found, err = m.re.exec16(m.in16, m.at, m.re.flags.Sticky, nil)
+	}
+	if !found || err != nil {
+		m.done = true
+		return 0, 0, false, err
+	}
+	m.step(from, to)
+	return from, to, true, nil
+}
+
+// NextIndex is TryNextIndex, which panics when a match reaches a limit or the text is not UTF-8.
+func (m *Matches) NextIndex() (int, int, bool) {
+	from, to, found, err := m.TryNextIndex()
+	if err != nil {
+		panic(err)
+	}
+	return from, to, found
+}
+
+// TryCount counts the matches left.
+func (m *Matches) TryCount() (int, error) {
+	n := 0
+	for {
+		_, _, found, err := m.TryNextIndex()
+		if err != nil || !found {
+			return n, err
+		}
+		n++
+	}
+}
+
+// Count is TryCount, which panics when a match reaches a limit or the text is not UTF-8.
+func (m *Matches) Count() int { return must(m.TryCount()) }
+
+// step moves the search on after the match from..to.
+func (m *Matches) step(from, to int) {
+	if m.utf8 {
+		m.at = m.re.nextStart8(m.in8, from, to)
+		m.done = m.at > len(m.in8)
+	} else {
+		m.at = m.re.nextStart16(m.in16, from, to)
+		m.done = m.at > len(m.in16)
+	}
+}

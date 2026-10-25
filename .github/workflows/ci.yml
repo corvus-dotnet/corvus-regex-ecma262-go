@@ -1,7 +1,7 @@
-# Build (vet clean, gofmt clean), the tests, the generated files and the ECMA-262 test data, on Go 1.25 (the module's
-# floor), 1.26 and 1.27 on Linux and on the newest on Windows. The data (github.com/corvus-dotnet/ecma262-regex-test-data)
-# is pinned to a commit; the pass is 0 wrong answers, 0 refusals of a valid pattern, 0 acceptances of an invalid one and
-# 0 matches at their limit, in both encodings.
+# Build (vet clean, gofmt clean), the tests, the generated files, the stack probe and the ECMA-262 test data, on Go
+# 1.25 (the module's floor), 1.26 and 1.27 on Linux and on the newest on Windows. The data
+# (github.com/corvus-dotnet/ecma262-regex-test-data) is pinned to a commit; the pass is 0 wrong answers, 0 refusals of
+# a valid pattern, 0 acceptances of an invalid one and 0 matches at their limit, in both encodings.
 name: ci
 on:
   push:
@@ -75,6 +75,10 @@ jobs:
         if (-not (Select-String -Path regex.go -SimpleMatch 'const Version = "99.98.97"' -Quiet)) { throw 'the version was not stamped' }
         go build ./...
         git checkout -- regex.go
+    - name: Probe for stack overflows
+      # Deep, wide and long patterns in every grammar through every member, each in a process of its own with the
+      # largest goroutine stack at 1 GB and at 2 MB: none may end the program (tools/stackprobe).
+      run: go run ./tools/stackprobe
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
         repository: corvus-dotnet/ecma262-regex-test-data

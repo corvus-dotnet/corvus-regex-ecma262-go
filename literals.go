@@ -6,6 +6,7 @@ package ecmaregex
 
 import (
 	"slices"
+	"sync"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -110,6 +111,9 @@ func newLiterals(lits [][]rune, cuts []int) *literals {
 	return l
 }
 
+// packs holds the buffers of the packed search, which a search passes to a finder and so cannot keep on its stack.
+var packs = sync.Pool{New: func() any { return new([packChunk]byte) }}
+
 func isSurrogate(u uint16) bool { return 0xD800 <= u && u <= 0xDFFF }
 
 // find8 returns the leftmost occurrence at or after from in UTF-8 text, as its start and end, or -1.
@@ -185,7 +189,9 @@ func (l *literals) findPacked(s []uint16, from int) (int, int) {
 		return -1, -1
 	}
 	overlap := max(l.longest-1, 0)
-	var buf [packChunk]byte
+	bp := packs.Get().(*[packChunk]byte)
+	defer packs.Put(bp)
+	buf := bp[:]
 	at, end := from, min(from+firstPack, units)
 	for {
 		n := end - at

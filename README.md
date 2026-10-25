@@ -15,6 +15,9 @@ Regular expressions with the grammar and the answers of ECMA-262, the `RegExp` o
 - The method set of the standard library's `regexp` (`MatchString`, `FindStringIndex`, `FindAllStringIndex`,
   `FindStringSubmatchIndex`, `ReplaceAllString`, `Split` and their `[]byte` forms), with ECMA-262's answers: the global
   search moves on as `matchAll` does, and replace has every `$` form of `GetSubstitution`.
+- The search layer of the crate: literals found by their rarest bytes, the windows of an alternation, the search after
+  loops, the shapes answered without the matcher, and automata over ASCII for where a match starts and ends
+  (`docs/port-checklist.md`). A global search through `Matches` into a `Captures` allocates nothing.
 - A pattern without a backreference is matched in time proportional to its size times the text. A pattern can be
   given a match timeout, as a `Regex` of .NET can, which bounds the time and the backtracking memory of every match;
   the `Try` methods return the error. With a timeout and the module's limits of pattern size, neither a pattern nor a
@@ -45,9 +48,9 @@ if re.CapturesString(c, "on 2026-10-25", 0) {
 
 ## Status
 
-Not yet released. The parser, the compiler and the matcher are in, and the whole test data passes. The search layer
-of the crate (where a match can start), the harness for the central benchmark site and the first release, 0.1.0, come
-next.
+Not yet released. The parser, the compiler, the matcher and the crate's search layer (where a match can start, and the
+automata, `docs/port-checklist.md`) are in, and the whole test data passes. The harness for the central benchmark site
+and the first release, 0.1.0, come next.
 
 ## Installing
 
