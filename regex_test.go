@@ -187,6 +187,9 @@ func TestCapturesAllocateNothing(t *testing.T) {
 	if !re.CapturesText(c, text, 0) || c.Start(0) != 2 || c.End(2) != 5 || c.Named("v") != 2 {
 		t.Fatalf("CapturesText = %v", c.Index())
 	}
+	if raceEnabled {
+		t.Skip("the race detector's sync.Pool drops what is put back, so a match allocates its state again")
+	}
 	allocs := testing.AllocsPerRun(100, func() {
 		for at := 0; re.CapturesText(c, text, at); at = c.End(0) {
 		}
