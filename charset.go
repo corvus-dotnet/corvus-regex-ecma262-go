@@ -474,3 +474,16 @@ func stringPropertyOf(name string) *stringProperty {
 	}
 	return nil
 }
+
+// ucdTable is a generated table of code points.
+type ucdTable = ucd.Table
+
+// mustBinaryTable returns the generated table of a binary property the engine relies on. Its absence means the
+// generated tables are broken, so it panics.
+func mustBinaryTable(name string) *ucdTable {
+	t := ucd.BinaryTable(name)
+	if t == nil {
+		panic("the Unicode tables have no " + name)
+	}
+	return t
+}
