@@ -5,6 +5,7 @@ package ecmaregex
 
 import (
 	"errors"
+	"os"
 	"sync"
 	"time"
 )
@@ -131,9 +132,10 @@ const (
 	maxRetainedStack = 1 << 16
 )
 
-// memoFromTheStart makes every match take its memory of failed places before its first step. The tests set it, to run
-// every pattern they have with the memory in use, and so does the test data runner when asked.
-var memoFromTheStart = false
+// memoFromTheStart makes every match take its memory of failed places before its first step, so that every pattern is
+// run with the memory in use. The environment variable CORVUS_REGEX_MEMO_FROM_THE_START=1 sets it, which CI does for a
+// second run of the tests and of the test data.
+var memoFromTheStart = os.Getenv("CORVUS_REGEX_MEMO_FROM_THE_START") == "1"
 
 var states = sync.Pool{New: func() any { return new(state) }}
 

@@ -1,0 +1,23 @@
+{
+  "packages": [
+    {
+      "name": "corvus-regex-ecma262-go",
+      "tag": "v",
+      "stampedTag": true,
+      "nextVersion": "0.1.0",
+      "paths": [
+        "go.mod",
+        ":(glob)*.go",
+        "internal/"
+      ],
+      "stamp": [
+        {
+          "file": "regex.go",
+          "placeholder": "const Version = \"0.0.0\"",
+          "with": "const Version = \"{version}\"",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

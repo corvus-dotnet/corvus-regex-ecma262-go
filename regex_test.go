@@ -176,3 +176,41 @@ func TestTimeout(t *testing.T) {
 		t.Error("a pattern without a timeout has one")
 	}
 }
+
+func TestCapturesAllocateNothing(t *testing.T) {
+	re := MustCompile(`(?<k>\w+)=(?<v>\d+)`, "u")
+	c := re.NewCaptures()
+	text, err := NewTextString("x a=1 b=22")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !re.CapturesText(c, text, 0) || c.Start(0) != 2 || c.End(2) != 5 || c.Named("v") != 2 {
+		t.Fatalf("CapturesText = %v", c.Index())
+	}
+	allocs := testing.AllocsPerRun(100, func() {
+		for at := 0; re.CapturesText(c, text, at); at = c.End(0) {
+		}
+	})
+	if allocs != 0 {
+		t.Errorf("%v allocations for each search", allocs)
+	}
+	if re.CapturesText(c, text, 11) || c.Found() || c.Index() != nil {
+		t.Error("a failed match leaves the last one")
+	}
+}
+
+func TestBytes(t *testing.T) {
+	re := MustCompile(`b+`, "g")
+	if !re.Match([]byte("abbc")) || !slices.Equal(re.FindIndex([]byte("abbc")), []int{1, 3}) {
+		t.Error("Match or FindIndex")
+	}
+	if got := string(re.Replace([]byte("abcb"), []byte("[$&]"))); got != "a[b]c[b]" {
+		t.Errorf("Replace = %q", got)
+	}
+	if _, err := re.TryMatch([]byte{0xC0, 0x80}); err == nil {
+		t.Error("an overlong form is read as UTF-8")
+	}
+	if _, err := NewText([]byte{0xED, 0xA0, 0x80}); err == nil {
+		t.Error("a surrogate in UTF-8 is read as UTF-8")
+	}
+}

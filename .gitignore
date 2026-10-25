@@ -1,2 +1,5 @@
-/wrong-cases*.tsv
-/out/
+/dataset
+wrong-cases*.tsv
+.idea/
+.vscode/
+__pycache__/
