@@ -62,6 +62,22 @@ go get github.com/corvus-dotnet/corvus-regex-ecma262-go
 
 The module has no dependency.
 
+## Benchmarks
+
+The [central benchmark site](https://corvus-oss.org/corvus-regex-ecma262-benchmarks/) runs this repository's harness
+image, `ghcr.io/corvus-dotnet/corvus-regex-ecma262-go`, each night beside the engines of every other source: this
+library over UTF-8 and UTF-16, Go's `regexp`, goja (a JavaScript engine written in Go) and V8, over the Industry
+workloads of dotnet/performance, with each ECMA-262 engine's compliance over the test data. This repository publishes
+no figures of its own. `tools/benchmarks/run.sh <workloads.json> <texts> <out.json>` runs the same harness anywhere
+(see the script for what it needs).
+
+goja's compliance takes some minutes to work out, so it is worked out once (`GOJA_COMPLIANCE=1`, which runs
+`tools/benchmarks/goja-dataset`) and checked in as `tools/benchmarks/compliance-goja.json`, with the commit of the data
+it was made at. goja cannot be stopped in a match, so each file is judged in a child process whose watchdog ends it at
+an answer that passes 2 seconds; that answer is unanswered, and a new child goes on from the next. goja has no `d`
+flag, so the answers that need the positions of groups are wrong, and no `v` flag, so that grammar is left out, as its
+compliance declares.
+
 ## Building and testing
 
 ```

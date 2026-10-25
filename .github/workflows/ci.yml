@@ -75,6 +75,16 @@ jobs:
         if (-not (Select-String -Path regex.go -SimpleMatch 'const Version = "99.98.97"' -Quiet)) { throw 'the version was not stamped' }
         go build ./...
         git checkout -- regex.go
+    - name: The benchmark harness builds
+      # Its own module (tools/benchmarks), which takes goja and so needs Go 1.26; the library needs 1.25.
+      if: matrix.go != '1.25'
+      working-directory: tools/benchmarks
+      run: |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then echo "::error::not gofmt'd: $unformatted"; exit 1; fi
+        go vet ./...
+        go build ./...
+        python3 -m py_compile industry-results.py count-gate.py v8/workloads.py
     - name: Probe for stack overflows
       # Deep, wide and long patterns in every grammar through every member, each in a process of its own with the
       # largest goroutine stack at 1 GB and at 2 MB: none may end the program (tools/stackprobe).
@@ -85,6 +95,23 @@ jobs:
         ref: cff0860b7ebc5eb9c801eb9f8cec9d5398688ff2
         path: ecma262-regex-test-data
         persist-credentials: false
+    - name: The checked-in counts were made at this commit of the test data
+      # The compliance of an engine too slow to judge every night is checked in beside the harness, with the commit of
+      # the data it was made at (dataCommit); the benchmark page judges it against that commit. Moving the pin above
+      # means working them out again (GOJA_COMPLIANCE=1, tools/benchmarks/run.sh), so they cannot fall behind it
+      # unnoticed.
+      if: runner.os == 'Linux'
+      run: |
+        pin=$(git -C ecma262-regex-test-data rev-parse HEAD)
+        fail=0
+        for f in $(git ls-files | grep -E '(^|/)compliance-[^/]*\.json$'); do
+          made=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("dataCommit", "none"))' "$f")
+          if [ "$made" != "$pin" ]; then
+            echo "::error file=$f::$f was made at $made, not the data CI checks out ($pin): work its counts out again at that commit."
+            fail=1
+          fi
+        done
+        exit $fail
     - name: Run the ECMA-262 test data
       run: go run ./tools/dataset ecma262-regex-test-data/data wrong-cases.tsv
     - name: Run the ECMA-262 test data with the memory of failed places from the first step
