@@ -1,0 +1,32 @@
+{
+ "right": 11769606,
+ "wrong": 1694013,
+ "refused": 6953,
+ "acceptedInvalid": 21001,
+ "limited": 3852,
+ "judge": {
+  "calls": {
+   "utf16": [
+    "RegExp.prototype.test",
+    "RegExp.prototype.exec",
+    "String.prototype.matchAll",
+    "String.prototype.replace",
+    "String.prototype.split"
+   ]
+  },
+  "runner": "https://github.com/corvus-dotnet/corvus-regex-ecma262-go/blob/main/tools/benchmarks/goja-dataset/judge.js"
+ },
+ "excludes": [
+  {
+   "class": "encoding",
+   "leaves": "utf8"
+  },
+  {
+   "class": "grammar",
+   "leaves": [
+    "unicode_sets"
+   ]
+  }
+ ],
+ "dataCommit": "cff0860b7ebc5eb9c801eb9f8cec9d5398688ff2"
+}
