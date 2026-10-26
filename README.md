@@ -52,13 +52,11 @@ if re.CapturesString(c, "on 2026-10-25", 0) {
 
 ## Status
 
-Not yet released. The parser, the compiler, the matcher and the crate's search layer (where a match can start, and the
-automata, `docs/port-checklist.md`) are in, the whole test data passes, and the harness of the central benchmark site
-is in. The first release, 0.1.0, comes next.
+0.1.0 is the first release. The parser, the compiler, the matcher and the crate's search layer (where a match can
+start, and the automata, `docs/port-checklist.md`) are in, the whole test data passes, and the central benchmark site
+runs the harness each night.
 
 ## Installing
-
-Once 0.1.0 is out:
 
 ```
 go get github.com/corvus-dotnet/corvus-regex-ecma262-go
