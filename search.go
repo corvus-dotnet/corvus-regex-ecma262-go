@@ -140,13 +140,11 @@ func (r *restCheck) pays() bool {
 	return r.checks.Load() < restTrials || r.rejects.Load()*8 >= restTrials
 }
 
-// count counts a check while it is still on trial.
+// count counts a check while it is still on trial: each of the first restTrials checks once, whichever goroutines
+// make them, and none after (the Load keeps the counter from being written on every check once the trial is over).
 func (r *restCheck) count(out bool) {
-	if c := r.checks.Load(); c < restTrials {
-		r.checks.Store(c + 1)
-		if out {
-			r.rejects.Add(1)
-		}
+	if r.checks.Load() < restTrials && r.checks.Add(1) <= restTrials && out {
+		r.rejects.Add(1)
 	}
 }
 

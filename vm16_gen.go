@@ -492,8 +492,14 @@ func (p *program) scan16(st *state, input []uint16, start, need int) (int, bool)
 			at = skip.skipAhead16(input, at)
 		}
 		// Every match starts with a member of the first set, which starts with one of the first bytes or units.
-		if at = p.firstFind16(input, at); at < 0 {
+		if at = p.firstStart16(input, at); at < 0 {
 			return 0, false
+		}
+		// With the u or v flag the trail half of a pair is not a character a match can start at; the place after it
+		// goes back through the skip.
+		if !units && s.firstUnits != nil && midPair16(input, at) {
+			at++
+			continue
 		}
 		if length-at < need {
 			return 0, false

@@ -56,6 +56,18 @@ func rareByte(b byte) bool {
 // pays for the compares where it is found.
 const aloneRank = 200
 
+// rarestAlone returns the position of the byte of a literal with the least share of text (unitShare) of those rare
+// enough to be searched for alone, or -1 for none.
+func rarestAlone(l []byte, rank *[256]int) int {
+	best := -1
+	for k, b := range l {
+		if alone(rank, b) && (best < 0 || unitShare[b] < unitShare[l[best]]) {
+			best = k
+		}
+	}
+	return best
+}
+
 // alone reports whether a byte is rare enough to be searched for alone: one rareByte names (the Rust crate's rule),
 // and one the ranks do not mark common (a byte a UTF-16 literal's unit beyond ASCII packs to, which packedRanks
 // marks).
@@ -108,14 +120,13 @@ func newByteFinder(literals [][]byte, rank *[256]int) byteFinder {
 		if len(l) == 1 {
 			return oneFinder(l[0])
 		}
-		// The rarest byte, searched for alone where it is rare enough; the pair search where every byte is common.
-		best := 0
-		for k := 1; k < len(l); k++ {
-			if rank[l[k]] < rank[l[best]] {
-				best = k
-			}
-		}
-		if alone(rank, l[best]) {
+		// The byte with the least share of text of those rare enough to be searched for alone; the pair search where
+		// every byte is common. The share, not byteRank, chooses: byteRank ranks Sherlock's k rarest, which the Sherlock
+		// Holmes text holds 3,595 times to its S's 837 (Sherlock 16.1 us by its S, 46.6 by its k). bytes.IndexByte
+		// reads a vector at a time and the pair search a word, so any rare byte is searched for alone, as the Java
+		// engine does with SWAR: Twain as a pair, as the Java engine's rule with vectors has it, took 2.4 times as
+		// long as by its T.
+		if best := rarestAlone(l, rank); best >= 0 {
 			return &rareFinder{literal: l, k: best}
 		}
 		if p := newPairFinder(literals, rank); p != nil {

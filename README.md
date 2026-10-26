@@ -22,6 +22,10 @@ Regular expressions with the grammar and the answers of ECMA-262, the `RegExp` o
   given a match timeout, as a `Regex` of .NET can, which bounds the time and the backtracking memory of every match;
   the `Try` methods return the error. With a timeout and the module's limits of pattern size, neither a pattern nor a
   text from outside can make a program hang. `SetDefaultMatchTimeout` gives every pattern one.
+- The matcher keeps its choices on a stack of its own; reading a deeply nested pattern recurses on the goroutine's
+  stack, which Go grows as it needs to. The module needs 2 MB of it at most (`tools/stackprobe`), so a program that
+  lowers the largest stack below that with `debug.SetMaxStack` can end on such a pattern, as it can on any deep
+  recursion.
 
 **Compliance.** Over the [ECMA-262 test data](https://github.com/corvus-dotnet/ecma262-regex-test-data) (what V8 says
 about its patterns and texts, test262's patterns and `exec` calls, the global search, `replace` and `split` among them,
@@ -49,8 +53,8 @@ if re.CapturesString(c, "on 2026-10-25", 0) {
 ## Status
 
 Not yet released. The parser, the compiler, the matcher and the crate's search layer (where a match can start, and the
-automata, `docs/port-checklist.md`) are in, and the whole test data passes. The harness for the central benchmark site
-and the first release, 0.1.0, come next.
+automata, `docs/port-checklist.md`) are in, the whole test data passes, and the harness of the central benchmark site
+is in. The first release, 0.1.0, comes next.
 
 ## Installing
 

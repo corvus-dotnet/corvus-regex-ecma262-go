@@ -6,6 +6,9 @@
 //	         [--rounds 3] [--seconds 0.7] [--passes 7] [--spread 0.05] [--filter <substring of the id>]
 //	         [--ids <file>] [--out <results.json>]
 //
+// An engine may name another build of this harness as engine@<binary> (corvus-utf8@/tmp/base/industry), which runs that
+// engine's figures in that binary, so that two builds of the library are timed side by side in one interleaved run.
+//
 // The protocol is interleaved, so that what changes on the host over a run (its clock, its heat, its other work) falls
 // on every engine alike: the workloads are the outer loop, each workload's rounds next and the engines innermost, their
 // order turned by one each round. Each figure is a child process of its own (this program, or Node for V8), so that one
@@ -306,6 +309,8 @@ func figure(v8, path string, index int, engine, seconds, passes string) string {
 	var cmd []string
 	if engine == "v8" {
 		cmd = []string{"node", v8, "--one", path, strconv.Itoa(index), seconds, passes}
+	} else if name, binary, ok := strings.Cut(engine, "@"); ok {
+		cmd = []string{binary, "--one", path, strconv.Itoa(index), name, seconds, passes}
 	} else {
 		self, err := os.Executable()
 		if err != nil {
