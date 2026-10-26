@@ -497,8 +497,14 @@ func (p *program) scan_T(st *state, input []unit_T, start, need int) (int, bool)
 			at = skip.skipAhead_T(input, at)
 		}
 		// Every match starts with a member of the first set, which starts with one of the first bytes or units.
-		if at = p.firstFind_T(input, at); at < 0 {
+		if at = p.firstStart_T(input, at); at < 0 {
 			return 0, false
+		}
+		// With the u or v flag the trail half of a pair is not a character a match can start at; the place after it
+		// goes back through the skip.
+		if !units && s.firstUnits != nil && midPair_T(input, at) {
+			at++
+			continue
 		}
 		if length-at < need {
 			return 0, false

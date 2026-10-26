@@ -492,8 +492,14 @@ func (p *program) scan8(st *state, input []byte, start, need int) (int, bool) {
 			at = skip.skipAhead8(input, at)
 		}
 		// Every match starts with a member of the first set, which starts with one of the first bytes or units.
-		if at = p.firstFind8(input, at); at < 0 {
+		if at = p.firstStart8(input, at); at < 0 {
 			return 0, false
+		}
+		// With the u or v flag the trail half of a pair is not a character a match can start at; the place after it
+		// goes back through the skip.
+		if !units && s.firstUnits != nil && midPair8(input, at) {
+			at++
+			continue
 		}
 		if length-at < need {
 			return 0, false

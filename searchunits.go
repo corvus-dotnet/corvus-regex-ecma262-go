@@ -29,6 +29,19 @@ func (p *program) firstFind16(input []uint16, at int) int {
 	}
 }
 
+// firstStart8 is firstFind8 for the scan, which passes over the trail half of a pair itself.
+func (p *program) firstStart8(input []byte, at int) int { return p.firstFind8(input, at) }
+
+// firstStart16 returns the first position at or after at whose unit a member of the first set can start with, or -1;
+// at itself where the search has no first units. It may be the trail half of a pair, which the scan passes over
+// itself, so that the skip is run from the place after it (firstFind16 passes over it).
+func (p *program) firstStart16(input []uint16, at int) int {
+	if fu := p.search.firstUnits; fu != nil {
+		return fu.find(input, at)
+	}
+	return at
+}
+
 func midPair8(input []byte, at int) bool { return false }
 
 // midPair16 reports whether the position is between the halves of a surrogate pair.

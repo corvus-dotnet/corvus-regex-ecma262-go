@@ -17,8 +17,9 @@ const (
 	// indexAlone is the most share of text (in parts per ten thousand, share16) a unit may have for the UTF-16 search
 	// to look for it alone.
 	indexAlone = 40
-	// packChunk is the units packed into bytes at a time for the packed search, and firstPack the first chunk packed,
-	// so that a search whose occurrence is near packs little.
+	// packChunk is the most units packed into bytes at a time for the packed search, and firstPack the first chunk
+	// packed: each chunk after it is twice the one before, up to packChunk, so that a search whose occurrence is near
+	// packs little more than it reads.
 	packChunk = 4096
 	firstPack = 256
 )
@@ -181,8 +182,9 @@ func (l *literals) literalAt16(s []uint16, p int) int {
 // ASCII unit has too). The .NET reference engine's packed search, which the crate makes with the ASCII units alone; the
 // low byte keeps the search one for every literal. An occurrence that starts so near the end of a chunk that a literal
 // could start before it and end beyond the chunk is looked for again in the next chunk, which starts that far back.
-// The first chunk is small, and each after it is the most, so a search whose occurrence is near packs little more
-// than it reads.
+// The first chunk is small, and each after it twice the one before up to the most, so that a search packs at most about
+// twice what it reads: a global search starts a search after each match, and with a chunk of the most after the first
+// one, a search whose occurrence was 1,300 units on packed 4,352.
 func (l *literals) findPacked(s []uint16, from int) (int, int) {
 	units := len(s)
 	if from > units {
@@ -192,7 +194,8 @@ func (l *literals) findPacked(s []uint16, from int) (int, int) {
 	bp := packs.Get().(*[packChunk]byte)
 	defer packs.Put(bp)
 	buf := bp[:]
-	at, end := from, min(from+firstPack, units)
+	size := firstPack
+	at, end := from, min(from+size, units)
 	for {
 		n := end - at
 		for i, u := range s[at:end] {
@@ -219,8 +222,8 @@ func (l *literals) findPacked(s []uint16, from int) (int, int) {
 		if last {
 			return -1, -1
 		}
-		at = end - overlap
-		end = min(at+packChunk, units)
+		at, size = end-overlap, min(2*size, packChunk)
+		end = min(at+size, units)
 	}
 }
 
