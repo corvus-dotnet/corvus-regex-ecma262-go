@@ -313,41 +313,40 @@ func binaryName(name string) string {
 	return ""
 }
 
-// propertyCache holds the sets already built for property expressions. A property set can have hundreds of ranges,
-// and schemas tend to repeat the same few. Only an expression ECMA-262 defines is kept, and those are a fixed few
-// hundred, so the cache is bounded.
-var propertyCache sync.Map // map[string]*charSet
-
-// propertySet resolves the expression between the braces of \p{...} to its set, or nil for a name or value that
-// ECMA-262 does not define.
-func propertySet(expr string) *charSet {
-	if cached, ok := propertyCache.Load(expr); ok {
+// propertySet resolves the expression between the braces of \p{...} to its set under a version of Unicode, or nil for a
+// name or value that ECMA-262 does not define.
+//
+// The sets already built are kept, one cache for each version (unicodeData.propertyCache). A property set can have
+// hundreds of ranges, and schemas tend to repeat the same few. Only an expression ECMA-262 defines is kept, and those
+// are a fixed few hundred, so each cache is bounded.
+func propertySet(uc *unicodeData, expr string) *charSet {
+	if cached, ok := uc.propertyCache.Load(expr); ok {
 		return cached.(*charSet)
 	}
-	pairs, ok := propertyPairs(expr)
+	pairs, ok := propertyPairs(uc.ucd, expr)
 	if !ok {
 		return nil
 	}
 	set := newCharSet(pairs, false)
-	propertyCache.Store(expr, set)
+	uc.propertyCache.Store(expr, set)
 	return set
 }
 
-// propertyPairs returns the ranges of a property expression. Every range comes from the tables of ucd, which hold one
-// fixed version of Unicode, so the answer does not depend on the toolchain.
-func propertyPairs(expr string) ([]rune, bool) {
+// propertyPairs returns the ranges of a property expression. Every range comes from the tables of ucd of the version,
+// so the answer does not depend on the toolchain.
+func propertyPairs(u *ucd.UCD, expr string) ([]rune, bool) {
 	if name, value, ok := strings.Cut(expr, "="); ok {
 		switch name {
 		case "General_Category", "gc":
-			return categoryPairs(value)
+			return categoryPairs(u, value)
 		case "Script", "sc":
-			return pairsOf(ucd.Script(value))
+			return pairsOf(u.Script(value))
 		case "Script_Extensions", "scx":
-			return pairsOf(ucd.ScriptExtensions(value))
+			return pairsOf(u.ScriptExtensions(value))
 		}
 		return nil, false
 	}
-	if pairs, ok := categoryPairs(expr); ok {
+	if pairs, ok := categoryPairs(u, expr); ok {
 		return pairs, true
 	}
 	switch canonical := binaryName(expr); canonical {
@@ -358,16 +357,16 @@ func propertyPairs(expr string) ([]rune, bool) {
 	case "Any":
 		return []rune{0, maxRune}, true
 	default:
-		return pairsOf(ucd.Binary(canonical))
+		return pairsOf(u.Binary(canonical))
 	}
 }
 
-func categoryPairs(value string) ([]rune, bool) {
+func categoryPairs(u *ucd.UCD, value string) ([]rune, bool) {
 	name := categoryName(value)
 	if name == "" {
 		return nil, false
 	}
-	return pairsOf(ucd.Category(name))
+	return pairsOf(u.Category(name))
 }
 
 func pairsOf(r ucd.Ranges, ok bool) ([]rune, bool) {
@@ -421,11 +420,13 @@ type stringProperty struct {
 	strings [][]rune
 }
 
-var allStringProperties = sync.OnceValue(func() []stringProperty {
-	all := make([]stringProperty, 0, len(stringProperties)+1)
+// readStringProperties reads the properties of strings of a version of Unicode (strings<major>_gen.go), and their
+// union last. unicodeData.stringProperties keeps them from their first use.
+func readStringProperties(properties *[6][3]string) []stringProperty {
+	all := make([]stringProperty, 0, len(properties)+1)
 	var union []rune
 	var every [][]rune
-	for _, row := range stringProperties {
+	for _, row := range properties {
 		var pairs []rune
 		for _, item := range strings.Fields(row[1]) {
 			lo, hi, ok := strings.Cut(item, "..")
@@ -451,23 +452,24 @@ var allStringProperties = sync.OnceValue(func() []stringProperty {
 		all = append(all, stringProperty{set: newCharSet(pairs, false), strings: sequences})
 	}
 	return append(all, stringProperty{set: newCharSet(union, false), strings: every})
-})
+}
 
 func hexRune(s string) rune {
 	v, err := strconv.ParseUint(s, 16, 32)
 	if err != nil {
-		panic("strings_gen.go has a code point that is not hexadecimal: " + s)
+		panic("the properties of strings have a code point that is not hexadecimal: " + s)
 	}
 	return rune(v)
 }
 
-// stringPropertyOf returns the property of strings of the name (RGI_Emoji and the six it is the union of), or nil.
-func stringPropertyOf(name string) *stringProperty {
-	all := allStringProperties()
+// stringPropertyOf returns the property of strings of the name (RGI_Emoji and the six it is the union of) under a
+// version of Unicode, or nil.
+func stringPropertyOf(uc *unicodeData, name string) *stringProperty {
+	all := uc.stringProperties()
 	if name == "RGI_Emoji" {
 		return &all[len(all)-1]
 	}
-	for k, row := range stringProperties {
+	for k, row := range uc.strings {
 		if row[0] == name {
 			return &all[k]
 		}
@@ -478,10 +480,10 @@ func stringPropertyOf(name string) *stringProperty {
 // ucdTable is a generated table of code points.
 type ucdTable = ucd.Table
 
-// mustBinaryTable returns the generated table of a binary property the engine relies on. Its absence means the
-// generated tables are broken, so it panics.
-func mustBinaryTable(name string) *ucdTable {
-	t := ucd.BinaryTable(name)
+// mustBinaryTable returns the generated table of a binary property the engine relies on, in a version of Unicode. Its
+// absence means the generated tables are broken, so it panics.
+func mustBinaryTable(u *ucd.UCD, name string) *ucdTable {
+	t := u.BinaryTable(name)
 	if t == nil {
 		panic("the Unicode tables have no " + name)
 	}

@@ -125,6 +125,8 @@ type node struct {
 	name []rune
 	// fold marks a nodeBackref, nodeWordBoundary or nodeNotWordBoundary inside a case-insensitive group.
 	fold bool
+	// foldVersion is the major number of the version of Unicode whose case folding a nodeBackref matches with.
+	foldVersion int32
 	// behind and negative describe a nodeLook.
 	behind, negative bool
 }
@@ -156,7 +158,11 @@ type parser struct {
 	sets bool
 	// escapeStrings are the sequences of the property of strings the last class escape named (the v flag), or nil.
 	escapeStrings [][]rune
-	depth         int
+	// uc is the Unicode of the version the pattern is read with.
+	uc *unicodeData
+	// es2020 is the grammar of ECMAScript 2020, which refuses what later editions added.
+	es2020 bool
+	depth  int
 	// groupCount and hasNames come from a scan of the whole pattern before parsing, because the meaning of \1 and \k
 	// depends on groups that may follow them.
 	groupCount int64
@@ -195,6 +201,10 @@ type syntax struct {
 	sets bool
 	// icase, multiline and dotAll are the i, m and s flags: the modifiers in force at the start of the pattern.
 	icase, multiline, dotAll bool
+	// edition is the edition of ECMA-262 whose grammar the pattern is read with.
+	edition Edition
+	// unicodeVersion is the version of Unicode whose tables the pattern is read with.
+	unicodeVersion UnicodeVersion
 }
 
 // parseWith reads the pattern. It returns a *syntaxError for a pattern that is not valid under the chosen grammar,
@@ -211,6 +221,8 @@ func parseWith(pattern string, sx syntax) (*node, *parser, error) {
 		p:         p,
 		unicode:   sx.unicode,
 		sets:      sx.sets,
+		uc:        sx.unicodeVersion.data(),
+		es2020:    sx.edition == EditionES2020,
 		names:     map[string][]namedGroup{},
 		icase:     sx.icase,
 		multiline: sx.multiline,
@@ -314,13 +326,12 @@ func inASCII(c rune, set string) bool {
 	return 0 <= c && c < 0x80 && strings.IndexByte(set, byte(c)) >= 0
 }
 
+// foldVersion is the major number of the version of Unicode the pattern is read with, which a backreference folds case
+// with.
+func (ps *parser) foldVersion() int32 { return int32(ps.uc.ucd.Major()) }
+
 // syntaxCharacter reports whether c is one of the characters the u flag lets an identity escape name.
 func syntaxCharacter(c rune) bool { return inASCII(c, `^$\.*+?()[]{}|/`) }
-
-var (
-	idStart    = sync.OnceValue(func() *ucdTable { return mustBinaryTable("ID_Start") })
-	idContinue = sync.OnceValue(func() *ucdTable { return mustBinaryTable("ID_Continue") })
-)
 
 func appendClassAtom(pairs []rune, c rune, set *charSet) []rune {
 	if set != nil {
@@ -477,7 +488,7 @@ func (ps *parser) alternative() (*node, error) {
 // characters equivalent to it.
 func (ps *parser) charNodeOf(c rune) *node {
 	if ps.icase {
-		set, _ := foldClosure(newCharSet([]rune{c, c}, false), ps.unicode)
+		set, _ := foldClosure(ps.uc, newCharSet([]rune{c, c}, false), ps.unicode)
 		if len(set.ranges) != 2 || set.ranges[0] != set.ranges[1] {
 			return setNode(set)
 		}
@@ -501,7 +512,7 @@ func (ps *parser) setNodeOf(set *charSet) (*node, error) {
 // fold returns the set with every character equivalent to one of its members. It charges the pattern for the work
 // and for the set: a byte for each character with a case variant that the set holds, and its ranges.
 func (ps *parser) fold(set *charSet) (*charSet, error) {
-	closed, variants := foldClosure(set, ps.unicode)
+	closed, variants := foldClosure(ps.uc, set, ps.unicode)
 	if err := ps.charge(variants + rangeSize*len(closed.ranges)/2); err != nil {
 		return nil, err
 	}
@@ -691,7 +702,8 @@ func (ps *parser) group() (*node, bool, error) {
 		}
 		return withSubs(nodeGroup, body), true, nil
 	}
-	if c := ps.peek(); c == 'i' || c == 'm' || c == 's' || c == '-' {
+	// Modifier groups came in ECMAScript 2025, so the 2020 grammar reads (?i as an invalid group.
+	if c := ps.peek(); (c == 'i' || c == 'm' || c == 's' || c == '-') && !ps.es2020 {
 		n, err := ps.modifierGroup()
 		return n, true, err
 	}
@@ -726,7 +738,10 @@ func (ps *parser) group() (*node, bool, error) {
 			return nil, false, err
 		}
 		// Two groups may share a name only when they are in separate alternatives of one disjunction, so that no
-		// match can go through both.
+		// match can go through both. The 2020 grammar refuses a name used twice, wherever the groups are.
+		if ps.es2020 && len(ps.names[string(name)]) > 0 {
+			return nil, false, ps.fail("duplicate group name")
+		}
 		for _, other := range ps.names[string(name)] {
 			if !separateAlternatives(other.path, ps.path) {
 				return nil, false, ps.fail("duplicate group name")
@@ -836,10 +851,10 @@ func (ps *parser) groupName() ([]rune, error) {
 			ps.i++
 		}
 		if len(name) == 0 {
-			if !(c == '$' || c == '_' || idStart().Contains(c)) {
+			if !(c == '$' || c == '_' || ps.uc.idStart().Contains(c)) {
 				return nil, ps.fail("invalid group name")
 			}
-		} else if !(c == '$' || c == 0x200C || c == 0x200D || idContinue().Contains(c)) {
+		} else if !(c == '$' || c == 0x200C || c == 0x200D || ps.uc.idContinue().Contains(c)) {
 			return nil, ps.fail("invalid group name")
 		}
 		name = append(name, c)
@@ -884,7 +899,7 @@ func (ps *parser) atomEscape() (*node, bool, error) {
 			}
 			ps.namedRefs = true
 			ps.needsBacktracking = true
-			return &node{kind: nodeBackref, name: name, fold: ps.icase}, true, nil
+			return &node{kind: nodeBackref, name: name, fold: ps.icase, foldVersion: ps.foldVersion()}, true, nil
 		}
 		ps.i++
 		return ps.charNodeOf('k'), true, nil
@@ -897,7 +912,8 @@ func (ps *parser) atomEscape() (*node, bool, error) {
 		}
 		if n <= ps.groupCount {
 			ps.needsBacktracking = true
-			return &node{kind: nodeBackref, groups: []int32{int32(n)}, fold: ps.icase}, true, nil
+			return &node{kind: nodeBackref, groups: []int32{int32(n)}, fold: ps.icase, foldVersion: ps.foldVersion()},
+				true, nil
 		}
 		if ps.unicode {
 			return nil, false, ps.fail("reference to a group that does not exist")
@@ -992,10 +1008,14 @@ func (ps *parser) classEscape(c rune) (*charSet, error) {
 		if !ps.eat('}') {
 			return nil, ps.fail("invalid property name")
 		}
-		found := propertySet(expr)
+		// The 2020 grammar knows only the names and values of its own tables, whatever the version of Unicode.
+		var found *charSet
+		if !ps.es2020 || es2020HasProperty(expr) {
+			found = propertySet(ps.uc, expr)
+		}
 		if found == nil {
 			if ps.sets && c == 'p' {
-				if property := stringPropertyOf(expr); property != nil {
+				if property := stringPropertyOf(ps.uc, expr); property != nil {
 					// A property of strings, which the v flag alone names, and which has no complement.
 					if err := ps.charge(rangeSize * (len(property.set.ranges)/2 + len(property.strings))); err != nil {
 						return nil, err
@@ -1548,7 +1568,7 @@ func (ps *parser) canonicalString(codePoints []rune) []rune {
 	out := make([]rune, len(codePoints))
 	for k, c := range codePoints {
 		if ps.icase {
-			c = canonicalize(c, true)
+			c = canonicalize(ps.uc.ucd, c, true)
 		}
 		out[k] = c
 	}

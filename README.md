@@ -7,8 +7,14 @@ Regular expressions with the grammar and the answers of ECMA-262, the `RegExp` o
   `v` flag has nested classes, the difference and the intersection of classes, strings in a class and the seven
   properties of strings.
 - ECMAScript 2025: lookbehind, named groups (and a name shared between alternatives), modifier groups such as
-  `(?i:...)`, and every Unicode property ECMA-262 lists, from tables of Unicode 17 the module carries, so a pattern
+  `(?i:...)`, and every Unicode property ECMA-262 lists, from tables of Unicode the module carries, so a pattern
   answers the same whatever Go builds it.
+- The grammar of ECMAScript 2020, which JSON Schema 2020-12 names, and a choice of Unicode version, each independent
+  of the other: `CompileOptions` takes an `Edition` (`EditionCurrent`, the default, or `EditionES2020`) and a
+  `UnicodeVersion` (`UnicodeDefault` for V8's version, which is 17 today, or `Unicode13`, `Unicode17`, `Unicode18` or
+  `UnicodeLatest`, which is 18 today). Both are settled when a pattern is compiled and cost a match nothing. The 2020
+  grammar refuses what later editions added: the `d` and `v` flags, modifier groups, a group name used twice, and
+  property names outside its tables.
 - Text as UTF-8 (a `string`, a `[]byte`, or a `Text`, which is checked once) or as UTF-16 (`[]uint16`, lone
   surrogates and all). Nothing is transcoded. Text that is not UTF-8 is refused, never read as U+FFFD. A match into a
   `Captures` allocates nothing once the working memory has grown.
@@ -21,7 +27,9 @@ Regular expressions with the grammar and the answers of ECMA-262, the `RegExp` o
 - A pattern without a backreference is matched in time proportional to its size times the text. A pattern can be
   given a match timeout, as a `Regex` of .NET can, which bounds the time and the backtracking memory of every match;
   the `Try` methods return the error. With a timeout and the module's limits of pattern size, neither a pattern nor a
-  text from outside can make a program hang. `SetDefaultMatchTimeout` gives every pattern one.
+  text from outside can make a program hang. `SetDefaultMatchTimeout` gives every pattern one; `CompileFlags` and
+  `CompileOptions` give a pattern its own, and return an error for a pattern that is not valid, so a validator needs
+  neither the default nor a panic.
 - The matcher keeps its choices on a stack of its own; reading a deeply nested pattern recurses on the goroutine's
   stack, which Go grows as it needs to. The module needs 2 MB of it at most (`tools/stackprobe`), so a program that
   lowers the largest stack below that with `debug.SetMaxStack` can end on such a pattern, as it can on any deep
@@ -30,7 +38,8 @@ Regular expressions with the grammar and the answers of ECMA-262, the `RegExp` o
 **Compliance.** Over the [ECMA-262 test data](https://github.com/corvus-dotnet/ecma262-regex-test-data) (what V8 says
 about its patterns and texts, test262's patterns and `exec` calls, the global search, `replace` and `split` among them,
 and texts of bytes that are not UTF-8, which it refuses), the module gives every answer right and none wrong, refuses
-no valid pattern, accepts no invalid one and reaches no limit, over UTF-8 and over UTF-16. CI runs the whole data on
+no valid pattern, accepts no invalid one and reaches no limit, over UTF-8 and over UTF-16. It does the same on the data
+as the data's own scripts write it for Unicode 13 and 18 and for the grammar of ECMAScript 2020. CI runs all of it on
 every change.
 
 It is a port of the Rust crate [corvus-regex-ecma262](https://github.com/corvus-dotnet/corvus-regex-ecma262-rs), and it
@@ -48,6 +57,14 @@ if re.CapturesString(c, "on 2026-10-25", 0) {
     month := c.Named("month")                             // 2
     _ = c.Start(month)                                    // 8
 }
+
+// ECMAScript 2020 as its edition was published, with the Unicode of its year, and a match timeout of its own.
+greek, err := ecmaregex.CompileOptions(`^\p{Script=Greek}+$`, ecmaregex.Options{
+    Flags:          ecmaregex.Flags{Unicode: true},
+    MatchTimeout:   time.Second,
+    Edition:        ecmaregex.EditionES2020,
+    UnicodeVersion: ecmaregex.Unicode13,
+})
 ```
 
 ## Status
@@ -89,8 +106,9 @@ go run ./tools/dataset <ecma262-regex-test-data>/data wrong-cases.tsv
 ```
 
 `vm8_gen.go`, `vm16_gen.go`, `regex8_gen.go` and `regex16_gen.go` are written from the templates by `internal/expand`,
-one for each encoding, and CI checks they are current. The Unicode tables (`internal/ucd/tables_gen.go`,
-`strings_gen.go`) are written from the Rust crate's by `tools/unicode`.
+one for each encoding, and CI checks they are current. The Unicode tables of each version
+(`internal/ucd/tables<major>_gen.go`, `strings<major>_gen.go`) and the property names of ECMAScript 2020
+(`es2020_gen.go`) are written from the Rust crate's by `tools/unicode`, and CI checks them against the crate.
 
 ## Releasing
 
