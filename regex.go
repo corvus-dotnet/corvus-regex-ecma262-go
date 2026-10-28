@@ -40,7 +40,7 @@ import (
 )
 
 // Version is the version of the module. A release writes its tag's version here; in the repository it is 0.0.0.
-const Version = "0.0.0"
+const Version = "0.1.1"
 
 // Flags are the flags of a pattern, as new RegExp(pattern, flags) reads them.
 type Flags struct {
