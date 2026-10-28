@@ -838,6 +838,7 @@ func (p *program) runOn_T(st *state, stackp *[]entry, input []unit_T, start int)
 				continue
 			}
 			steps -= int64((to - from) >> 3)
+			u := unicodeByMajor(i.b).ucd
 			at, ok := pos, true
 			for from < to && ok {
 				want, w := read_T(input, from, units)
@@ -848,7 +849,7 @@ func (p *program) runOn_T(st *state, stackp *[]entry, input []unit_T, start int)
 				}
 				got, w2 := read_T(input, at, units)
 				at += w2
-				ok = got == want || i.op == opBackrefFold && canonicalize(got, i.flag) == canonicalize(want, i.flag)
+				ok = got == want || i.op == opBackrefFold && canonicalize(u, got, i.flag) == canonicalize(u, want, i.flag)
 			}
 			if ok {
 				pos = at
@@ -863,6 +864,7 @@ func (p *program) runOn_T(st *state, stackp *[]entry, input []unit_T, start int)
 				continue
 			}
 			steps -= int64((to - from) >> 3)
+			u := unicodeByMajor(i.b).ucd
 			at, ok := pos, true
 			for from < to && ok {
 				want, w := readLast_T(input, to, units)
@@ -873,7 +875,7 @@ func (p *program) runOn_T(st *state, stackp *[]entry, input []unit_T, start int)
 				}
 				got, w2 := readLast_T(input, at, units)
 				at -= w2
-				ok = got == want || i.op == opBackrefFoldBack && canonicalize(got, i.flag) == canonicalize(want, i.flag)
+				ok = got == want || i.op == opBackrefFoldBack && canonicalize(u, got, i.flag) == canonicalize(u, want, i.flag)
 			}
 			if ok {
 				pos = at

@@ -3,6 +3,7 @@
 // there), with the same judging rules.
 //
 //	go run ./tools/dataset <data directory> <wrong-cases output file> [file filter] [utf16|utf8|both] [--compliance <file>]
+//	    [--edition current|es2020] [--unicode 13|17|18|latest]
 //
 // Each record is asked about under each grammar V8 found it valid in: the record's flags with u added (the unicode
 // answers), the record's flags alone (the legacy answers) and, in the file that has them, the flags with v added (the
@@ -16,6 +17,9 @@
 // the record's flags from its lastIndex, right when the positions of the match and of every group, the named groups
 // and, with g or y, the lastIndex after are V8's; one answer over UTF-16 and, when the text holds no lone surrogate and
 // lastIndex is not between the halves of a pair, one over UTF-8 with positions in bytes.
+//
+// With --edition and --unicode the engine reads every pattern with that edition's grammar and that version's tables, and
+// the data is the data as node edition.js apply or node unicode.js apply writes it for them.
 //
 // With --compliance <file>, the engine's compliance object is written to the file, as the benchmark page reads it
 // (docs/implementing-a-source.md in corvus-regex-ecma262-benchmarks): the counts, this runner and the calls it makes
@@ -68,8 +72,39 @@ func main() {
 		compliance = args[at+1]
 		args = slices.Delete(args, at, at+2)
 	}
+	take := func(name string) string {
+		at := slices.Index(args, name)
+		if at < 0 {
+			return ""
+		}
+		value := args[at+1]
+		args = slices.Delete(args, at, at+2)
+		return value
+	}
+	switch e := take("--edition"); e {
+	case "", "current":
+	case "es2020":
+		settings.Edition = ecmaregex.EditionES2020
+	default:
+		fmt.Fprintln(os.Stderr, "the edition is current or es2020, not "+e)
+		os.Exit(2)
+	}
+	switch v := take("--unicode"); v {
+	case "":
+	case "13", "13.0":
+		settings.UnicodeVersion = ecmaregex.Unicode13
+	case "17", "17.0":
+		settings.UnicodeVersion = ecmaregex.Unicode17
+	case "18", "18.0":
+		settings.UnicodeVersion = ecmaregex.Unicode18
+	case "latest":
+		settings.UnicodeVersion = ecmaregex.UnicodeLatest
+	default:
+		fmt.Fprintln(os.Stderr, "the Unicode version is 13, 17, 18 or latest, not "+v)
+		os.Exit(2)
+	}
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dataset <data directory> <wrong-cases output file> [file filter] [utf16|utf8|both] [--compliance <file>]")
+		fmt.Fprintln(os.Stderr, "usage: dataset <data directory> <wrong-cases output file> [file filter] [utf16|utf8|both] [--compliance <file>] [--edition current|es2020] [--unicode 13|17|18|latest]")
 		os.Exit(2)
 	}
 	directory, wrongPath := args[0], args[1]
@@ -284,12 +319,17 @@ func firstLine(s string) string {
 	return s
 }
 
+// settings are the edition and the version of Unicode the engine reads every pattern with (--edition, --unicode).
+var settings ecmaregex.Options
+
 func compile(pattern, flags string) (*ecmaregex.Regexp, error) {
 	f, err := ecmaregex.ParseFlags(flags)
 	if err != nil {
 		return nil, err
 	}
-	return ecmaregex.CompileFlags(pattern, f, limit)
+	opts := settings
+	opts.Flags, opts.MatchTimeout = f, limit
+	return ecmaregex.CompileOptions(pattern, opts)
 }
 
 // limitKind says which limit a match reached, or "" when the error is not a limit.
@@ -384,6 +424,9 @@ func judgeTests(name string, r any, pattern string, c *counts, wrong *[]string) 
 					message = "PARSE: " + err.Error()
 				case ecmaregex.ErrTooLarge:
 					message = "TOO-LARGE: " + err.Error()
+				case ecmaregex.ErrFlags:
+					// The flags of a grammar the edition does not have (the v flag of ECMAScript 2020): a refusal.
+					message = "FLAGS: " + err.Error()
 				default:
 					c.errors.Add(1)
 				}
@@ -707,6 +750,17 @@ func judgeCaptures(r any, pattern string, c *counts, wrong *[]string) {
 	shown := escape(utf16.Encode([]rune(pattern)))
 	tests := array(get(r, "tests"))
 	cache := &regexps{pattern, map[string]*ecmaregex.Regexp{}}
+	// A grammar the data finds the pattern not valid in, as an overlay may, must be refused here too.
+	for _, m := range []string{"unicode", "legacy"} {
+		modeFlags := flags
+		if m == "unicode" {
+			modeFlags += "u"
+		}
+		if get(valid, m) == false && cache.make(modeFlags) != nil {
+			c.accepted.Add(1)
+			*wrong = append(*wrong, "ACCEPTED-INVALID\tcaptures.jsonl\t/"+shown+"/"+modeFlags)
+		}
+	}
 	for _, t := range tests {
 		if get(t, "v8_deviation") == true {
 			continue

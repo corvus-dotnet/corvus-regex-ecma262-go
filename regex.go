@@ -18,6 +18,10 @@
 // with the Try methods, which return ErrTime or ErrMemory when a match reaches a limit; the others panic then. A
 // pattern without a timeout never reaches a limit. SetDefaultMatchTimeout gives every pattern compiled after it one.
 //
+// CompileOptions reads a pattern with the grammar of ECMAScript 2020 (EditionES2020), the grammar JSON Schema 2020-12
+// names, and with the tables of Unicode 13, 17 or 18 (UnicodeVersion), each chosen on its own. Both are read when the
+// pattern is compiled, so a match costs the same whichever is chosen.
+//
 // The engine is a port of the Rust crate corvus-regex-ecma262, file for file (parse.go is parse.rs, compile.go is
 // compile.rs, and so on), held to the same ECMA-262 test data.
 package ecmaregex
@@ -192,6 +196,9 @@ type Regexp struct {
 	caps     *program
 	info     *groupInfo
 	timeout  time.Duration
+	// edition and unicodeVersion, resolved, are what the pattern was read with.
+	edition        Edition
+	unicodeVersion UnicodeVersion
 	// regular says the pattern needs no backtracking and is small enough for a linear matcher (re2Cost), so a test from
 	// the start of a text can be answered by the automaton over ASCII (see dfa.go), built on the first such test.
 	regular bool
@@ -220,10 +227,34 @@ func MustCompile(pattern, flags string) *Regexp {
 
 // CompileFlags compiles a pattern with the flags and the match timeout (0 for none).
 func CompileFlags(pattern string, flags Flags, matchTimeout time.Duration) (*Regexp, error) {
+	return CompileOptions(pattern, Options{Flags: flags, MatchTimeout: matchTimeout})
+}
+
+// CompileOptions compiles a pattern with the settings of opts: the flags, the match timeout, the edition of ECMA-262
+// whose grammar it is read with and the version of Unicode whose tables it is read with, each independent of the
+// others. It returns an error, and never panics, for a pattern or flags that are not valid, so a validator can compile
+// a pattern from outside with a match timeout of its own and no default.
+//
+//	// ECMAScript 2020 as its edition was published, with the Unicode of its year, as JSON Schema 2020-12 reads a
+//	// pattern.
+//	re, err := ecmaregex.CompileOptions(`^\p{Script=Greek}+$`, ecmaregex.Options{
+//		Flags:          ecmaregex.Flags{Unicode: true},
+//		MatchTimeout:   time.Second,
+//		Edition:        ecmaregex.EditionES2020,
+//		UnicodeVersion: ecmaregex.Unicode13,
+//	})
+//
+// Under EditionES2020 the d and v flags are an error of kind ErrFlags.
+func CompileOptions(pattern string, opts Options) (*Regexp, error) {
+	flags := opts.Flags
+	sx, err := syntaxOf(opts)
+	if err != nil {
+		return nil, err
+	}
 	if !utf8.ValidString(pattern) {
 		return nil, &Error{Kind: ErrEncoding, msg: fmt.Sprintf("ecmaregex: the pattern %q is not UTF-8", pattern)}
 	}
-	root, ps, err := parseWith(pattern, flags.syntax())
+	root, ps, err := parseWith(pattern, sx)
 	if err != nil {
 		return nil, compileError(pattern, err)
 	}
@@ -238,18 +269,44 @@ func CompileFlags(pattern string, flags Flags, matchTimeout time.Duration) (*Reg
 		flags:   flags,
 		prog:    compileProgram(root, flags.Unicode || flags.UnicodeSets, -1),
 		info:    info,
-		timeout: max(matchTimeout, 0),
+		timeout: max(opts.MatchTimeout, 0),
 		regular: regular,
+		edition: opts.Edition,
+		// A resolved version: never UnicodeDefault or UnicodeLatest.
+		unicodeVersion: opts.UnicodeVersion.Resolve(),
 	}, nil
+}
+
+// syntaxOf returns the grammar of the settings. The grammar of ECMAScript 2020 has no d flag (2022) and no v flag
+// (2024), and refuses them as flags that are not valid.
+func syntaxOf(opts Options) (syntax, error) {
+	f := opts.Flags
+	if opts.Edition == EditionES2020 && (f.HasIndices || f.UnicodeSets) {
+		return syntax{}, &Error{Kind: ErrFlags,
+			msg: fmt.Sprintf("ecmaregex: the flags %q have d or v, which ECMAScript 2020 does not have", f.String())}
+	}
+	sx := f.syntax()
+	sx.edition, sx.unicodeVersion = opts.Edition, opts.UnicodeVersion
+	return sx, nil
 }
 
 // IsValid reports whether a pattern is valid with the flags.
 func IsValid(pattern, flags string) bool {
 	f, err := ParseFlags(flags)
+	if err != nil {
+		return false
+	}
+	return IsValidOptions(pattern, Options{Flags: f})
+}
+
+// IsValidOptions reports whether a pattern is valid with the flags of opts, in the grammar of its edition and under its
+// version of Unicode, without compiling it. The match timeout is not read.
+func IsValidOptions(pattern string, opts Options) bool {
+	sx, err := syntaxOf(opts)
 	if err != nil || !utf8.ValidString(pattern) {
 		return false
 	}
-	_, _, err = parseWith(pattern, f.syntax())
+	_, _, err = parseWith(pattern, sx)
 	return err == nil
 }
 
@@ -271,6 +328,20 @@ func (re *Regexp) Pattern() string { return re.pattern }
 
 // Flags returns the pattern's flags.
 func (re *Regexp) Flags() Flags { return re.flags }
+
+// Edition returns the edition of ECMA-262 whose grammar the pattern was read with.
+func (re *Regexp) Edition() Edition { return re.edition }
+
+// UnicodeVersion returns the version of Unicode whose tables the pattern was read with, resolved: never UnicodeDefault
+// or UnicodeLatest.
+func (re *Regexp) UnicodeVersion() UnicodeVersion { return re.unicodeVersion }
+
+// syntax returns the grammar the pattern was read with, to read it again.
+func (re *Regexp) syntax() syntax {
+	sx := re.flags.syntax()
+	sx.edition, sx.unicodeVersion = re.edition, re.unicodeVersion
+	return sx
+}
 
 // MatchTimeout returns the time each match may take, or 0 for no limit.
 func (re *Regexp) MatchTimeout() time.Duration { return re.timeout }
@@ -309,7 +380,7 @@ func (re *Regexp) capsProgram() *program {
 		return re.prog
 	}
 	re.capsOnce.Do(func() {
-		root, _, err := parseWith(re.pattern, re.flags.syntax())
+		root, _, err := parseWith(re.pattern, re.syntax())
 		if err != nil {
 			panic("ecmaregex: a compiled pattern was not read again: " + err.Error())
 		}
@@ -321,7 +392,7 @@ func (re *Regexp) capsProgram() *program {
 // automaton returns the automaton over ASCII of a regular pattern, or nil when it has none.
 func (re *Regexp) automaton() *dfa {
 	re.dfaOnce.Do(func() {
-		root, _, err := parseWith(re.pattern, re.flags.syntax())
+		root, _, err := parseWith(re.pattern, re.syntax())
 		if err == nil {
 			re.dfa = buildDfa(root)
 		}

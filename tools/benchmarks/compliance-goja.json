@@ -1,9 +1,9 @@
 {
- "right": 11769606,
- "wrong": 1694013,
- "refused": 6953,
+ "right": 11786378,
+ "wrong": 1682715,
+ "refused": 6566,
  "acceptedInvalid": 21001,
- "limited": 3852,
+ "limited": 3837,
  "judge": {
   "calls": {
    "utf16": [
@@ -28,5 +28,5 @@
    ]
   }
  ],
- "dataCommit": "cff0860b7ebc5eb9c801eb9f8cec9d5398688ff2"
+ "dataCommit": "1b4c4353c4fa3fc3e318db32ef0261391519b9a5"
 }

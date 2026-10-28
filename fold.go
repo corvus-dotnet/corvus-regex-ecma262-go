@@ -10,8 +10,8 @@ package ecmaregex
 // The parser applies the equivalence to every literal and class as it reads them, so a case-insensitive group is
 // matched with plain classes. Only a backreference needs the function when matching.
 //
-// The folding and the uppercase mapping come from the tables of ucd, never from the standard library, so a pattern
-// matches the same texts whichever toolchain built the program.
+// The folding and the uppercase mapping come from the tables of ucd of the pattern's version of Unicode, never from the
+// standard library, so a pattern matches the same texts whichever toolchain built the program.
 
 import (
 	"slices"
@@ -32,17 +32,18 @@ var multiUpper = sync.OnceValue(func() *charSet {
 	}, false)
 })
 
-// canonicalize is the Canonicalize function of ECMA-262 for case-insensitive matching.
-func canonicalize(r rune, unicodeMode bool) rune {
+// canonicalize is the Canonicalize function of ECMA-262 for case-insensitive matching, with the case mappings of a
+// version of Unicode.
+func canonicalize(u *ucd.UCD, r rune, unicodeMode bool) rune {
 	if unicodeMode {
 		// Every character of a simple case folding class folds to the same character.
-		return ucd.Fold(r)
+		return u.Fold(r)
 	}
 	// A character beyond the Basic Multilingual Plane is two code units, and neither has an uppercase form.
 	if r > 0xFFFF || multiUpper().contains(r) {
 		return r
 	}
-	upper := ucd.ToUpper(r)
+	upper := u.ToUpper(r)
 	if r >= 128 && upper < 128 || upper > 0xFFFF {
 		return r
 	}
@@ -79,41 +80,43 @@ func newFoldTable(classes map[rune][]rune) *foldTable {
 	return t
 }
 
-var unicodeFoldTable = sync.OnceValue(func() *foldTable {
+// unicodeFoldTable is the table of the u flag's grammar under a version of Unicode.
+func unicodeFoldTable(u *ucd.UCD) *foldTable {
 	// A class is a character that others fold to, with those others.
 	classes := map[rune][]rune{}
-	for _, r := range ucd.Folding() {
-		key := ucd.Fold(r)
+	for _, r := range u.Folding() {
+		key := u.Fold(r)
 		if classes[key] == nil {
 			classes[key] = []rune{key}
 		}
 		classes[key] = append(classes[key], r)
 	}
 	return newFoldTable(classes)
-})
+}
 
-var legacyFoldTable = sync.OnceValue(func() *foldTable {
+// legacyFoldTable is the table of the grammar of no flag under a version of Unicode.
+func legacyFoldTable(u *ucd.UCD) *foldTable {
 	classes := map[rune][]rune{}
 	for r := rune(0); r <= 0xFFFF; r++ {
-		key := canonicalize(r, false)
+		key := canonicalize(u, r, false)
 		classes[key] = append(classes[key], r)
 	}
 	return newFoldTable(classes)
-})
-
-// foldClasses returns the table of the grammar in use. It is built on first use, which only a pattern with a
-// case-insensitive group reaches.
-func foldClasses(unicodeMode bool) *foldTable {
-	if unicodeMode {
-		return unicodeFoldTable()
-	}
-	return legacyFoldTable()
 }
 
-// foldClosure returns the set of every character equivalent to some member of the set, and the number of characters
-// with a case variant that the set holds, which is the work it did.
-func foldClosure(set *charSet, unicodeMode bool) (*charSet, int) {
-	table := foldClasses(unicodeMode)
+// foldClasses returns the table of the grammar in use, for a version of Unicode. It is built on first use, which only a
+// pattern with a case-insensitive group reaches.
+func foldClasses(uc *unicodeData, unicodeMode bool) *foldTable {
+	if unicodeMode {
+		return uc.unicodeFold()
+	}
+	return uc.legacyFold()
+}
+
+// foldClosure returns the set of every character equivalent to some member of the set under a version of Unicode, and
+// the number of characters with a case variant that the set holds, which is the work it did.
+func foldClosure(uc *unicodeData, set *charSet, unicodeMode bool) (*charSet, int) {
+	table := foldClasses(uc, unicodeMode)
 	var extra []rune
 	variants := 0
 	for i := 0; i+1 < len(set.ranges); i += 2 {

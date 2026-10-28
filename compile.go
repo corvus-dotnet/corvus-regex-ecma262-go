@@ -77,7 +77,8 @@ type inst struct {
 	back []byte
 	// x and y are jump targets.
 	x, y int32
-	// a and b are a group, a loop or a range of groups, depending on the instruction.
+	// a and b are a group, a loop or a range of groups, depending on the instruction. For a backreference b is the
+	// major number of the version of Unicode whose case folding it matches with.
 	a, b int32
 	// min and max bound a repetition. A max of -1 is no bound.
 	min, max int32
@@ -582,7 +583,7 @@ func (c *compiler) emit(n *node, back bool) {
 		// When several groups share the name, at most one has taken part, and the others match the empty string. So
 		// matching each in turn matches the one that took part.
 		for _, g := range n.groups {
-			c.add(inst{op: o, a: c.tracked[g], flag: c.unicode})
+			c.add(inst{op: o, a: c.tracked[g], b: n.foldVersion, flag: c.unicode})
 		}
 	case nodeLook:
 		look := c.add(inst{op: opLook, flag: n.negative})

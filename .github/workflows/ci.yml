@@ -1,5 +1,6 @@
 # Build (vet clean, gofmt clean), the tests, the generated files, the stack probe and the ECMA-262 test data, on Go
-# 1.25 (the module's floor), 1.26 and 1.27 on Linux and on the newest on Windows. The data
+# 1.25 (the module's floor), 1.26 and 1.27 on Linux and on the newest on Windows; and on Linux, the data as its own
+# scripts write it for Unicode 13 and 18 and for the grammar of ECMAScript 2020. The data
 # (github.com/corvus-dotnet/ecma262-regex-test-data) is pinned to a commit; the pass is 0 wrong answers, 0 refusals of
 # a valid pattern, 0 acceptances of an invalid one and 0 matches at their limit, in both encodings.
 name: ci
@@ -50,13 +51,18 @@ jobs:
       # engine ports.
       with:
         repository: corvus-dotnet/corvus-regex-ecma262-rs
-        ref: f38cece52777ab7e1e8a5e68d609dcad76b35574
+        ref: 1036f8707c25b49d826501132619c5671431d685
         path: corvus-regex-ecma262-rs
         persist-credentials: false
     - name: The generated tables are current
+      # The tables and the properties of strings of each version of Unicode, and the property names of ECMAScript 2020.
       run: |
-        python3 tools/unicode/gen_tables.py corvus-regex-ecma262-rs/corvus-regex-ecma262/src/tables_gen.rs --check
-        python3 tools/unicode/gen_strings.py corvus-regex-ecma262-rs/corvus-regex-ecma262/src/strings_gen.rs --check
+        src=corvus-regex-ecma262-rs/corvus-regex-ecma262/src
+        for major in 13 17 18; do
+          python3 tools/unicode/gen_tables.py $src/tables$major.rs --check
+          python3 tools/unicode/gen_strings.py $src/strings$major.rs --check
+        done
+        python3 tools/unicode/gen_es2020.py $src/es2020.rs --check
     - name: Test
       run: go test -count=1 ./...
     - name: Test with the race detector
@@ -92,7 +98,7 @@ jobs:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
         repository: corvus-dotnet/ecma262-regex-test-data
-        ref: cff0860b7ebc5eb9c801eb9f8cec9d5398688ff2
+        ref: 1b4c4353c4fa3fc3e318db32ef0261391519b9a5
         path: ecma262-regex-test-data
         persist-credentials: false
     - name: The checked-in counts were made at this commit of the test data
@@ -119,6 +125,35 @@ jobs:
       run: go run ./tools/dataset ecma262-regex-test-data/data wrong-cases-memo.tsv
       env:
         CORVUS_REGEX_MEMO_FROM_THE_START: '1'
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      if: runner.os == 'Linux'
+      with:
+        node-version: '24.22.1'
+    - name: Run the ECMA-262 test data for other versions of Unicode and for ECMAScript 2020
+      # The data as its own scripts write it for Unicode 13 and 18 (unicode.js apply) and for the grammar of
+      # ECMAScript 2020 (edition.js apply), each judged with the engine set to match.
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        data=ecma262-regex-test-data
+        go build -o "$RUNNER_TEMP/dataset" ./tools/dataset
+        failed=()
+        run() {
+          name=$1; shift
+          out="$RUNNER_TEMP/$name"
+          case "$1" in
+            unicode.js) node "$data/unicode.js" apply "$2" "$out" "$data/data" ;;
+            edition.js) node "$data/edition.js" apply "$out" "$2" "$data/data" ;;
+          esac
+          shift 2
+          "$RUNNER_TEMP/dataset" "$out" "wrong-cases-$name.tsv" "$@" || failed+=("$name")
+        }
+        run unicode-13 unicode.js 13.0 --unicode 13
+        run unicode-18 unicode.js 18.0 --unicode 18
+        # An empty version is the data's own Unicode.
+        run es2020 edition.js "" --edition es2020
+        run es2020-unicode-13 edition.js 13.0 --edition es2020 --unicode 13
+        if [ ${#failed[@]} -gt 0 ]; then echo "::error::Wrong: ${failed[*]}"; exit 1; fi
     - name: Keep the wrong cases
       if: failure()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
