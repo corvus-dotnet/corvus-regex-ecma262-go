@@ -1,8 +1,8 @@
-# Build (vet clean, gofmt clean), the tests, the generated files, the stack probe and the ECMA-262 test data, on Go
-# 1.25 (the module's floor), 1.26 and 1.27 on Linux and on the newest on Windows; and on Linux, the data as its own
-# scripts write it for Unicode 13 and 18 and for the grammar of ECMAScript 2020. The data
-# (github.com/corvus-dotnet/ecma262-regex-test-data) is pinned to a commit; the pass is 0 wrong answers, 0 refusals of
-# a valid pattern, 0 acceptances of an invalid one and 0 matches at their limit, in both encodings.
+# Build (vet clean, gofmt clean), the tests, the generated files, the stack probe and the ECMA-262 test data, on Go 1.25
+# (the module's floor), 1.26 and 1.27 on Linux and on the newest on Windows and on Linux on arm64; and on Linux, the
+# data as its own scripts write it for Unicode 13 and 18 and for the grammar of ECMAScript 2020. The data
+# (github.com/corvus-dotnet/ecma262-regex-test-data) is pinned to a commit; the pass is 0 wrong answers, 0 refusals of a
+# valid pattern, 0 acceptances of an invalid one and 0 matches at their limit, in both encodings.
 name: ci
 on:
   push:
@@ -27,6 +27,7 @@ jobs:
         - { os: ubuntu-latest, go: '1.26' }
         - { os: ubuntu-latest, go: '1.27' }
         - { os: windows-latest, go: '1.27' }
+        - { os: ubuntu-24.04-arm, go: '1.27' }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
