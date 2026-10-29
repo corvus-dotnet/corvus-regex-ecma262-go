@@ -23,9 +23,9 @@ byte offsets, as `regexp`'s are, and a group that did not take part is -1, -1.
 **Flags.** The flags are ECMA-262's, as a string (`"gu"`) or the `Flags` struct, and nothing else. No flag is a
 `regexp` option the engine would have to refuse.
 
-**Edition and Unicode version.** `Options` carries an `Edition` (`EditionCurrent`, or `EditionES2020`, the grammar JSON
-Schema 2020-12 names) and a `UnicodeVersion` (13, 17, 18, latest, or V8's default), independent of each other and of
-the flags. Both are resolved when the pattern is compiled, so a match costs the same whatever they are.
+**Edition and Unicode version.** By default a pattern is read with today's grammar (`EditionCurrent`, ECMAScript 2025)
+and V8's version of Unicode (`UnicodeDefault`, 17 today). `Options` overrides either, independently of the other and
+of the flags: `EditionES2020` is the grammar JSON Schema 2020-12 names, and `UnicodeVersion` is 13, 17, 18 or latest. Both are resolved when the pattern is compiled, so a match costs the same whatever they are.
 
 **Errors.** `Compile` returns an `*Error` whose `Kind` is `ErrInvalid`, `ErrFlags` or `ErrTooLarge` (with a
 `*TooLargeError` naming the limit); `MustCompile` panics with it. A match that reaches its limit, and text that is not
