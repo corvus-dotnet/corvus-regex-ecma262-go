@@ -8,11 +8,7 @@
       "paths": [
         "go.mod",
         ":(glob)*.go",
-        "internal/",
-        "docs/getting-started.md",
-        "docs/api.md",
-        "docs/design.md",
-        "docs/contributing.md"
+        "internal/"
       ],
       "stamp": [
         {
