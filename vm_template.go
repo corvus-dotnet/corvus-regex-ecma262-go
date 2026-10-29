@@ -360,6 +360,14 @@ func (p *program) searchReverse_T(st *state, input []unit_T, start, need int) (a
 				k = bits.TrailingZeros64(pend0)
 			}
 			at := base + k
+			// The reach is hi characters, which is hi units only over ASCII: past a unit beyond ASCII the look ahead
+			// could stop short of an occurrence that allows an earlier start, so the search is made again the plain
+			// way, which counts in characters.
+			for i, end := at, min(at+hi, length); i < end; i++ {
+				if input[i] >= 0x80 {
+					return 0, false, false
+				}
+			}
 			if after <= at+hi {
 				if q2 := s.literals.findWithin_T(input, after, at+hi); q2 >= 0 {
 					q, taken = q2, true

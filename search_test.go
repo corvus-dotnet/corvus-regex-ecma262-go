@@ -156,6 +156,39 @@ func TestTheSearchesFindTheStartsTheFuzzerFound(t *testing.T) {
 	}
 }
 
+// TestAWindowReachesAsManyCharactersAsItCounts: the windows search with the reverse automaton tries a waiting start
+// once no later occurrence could allow an earlier one, looking for one within the window's reach, which is a number of
+// characters. Over two- and three-byte UTF-8, or surrogate pairs under u, that is more units than characters: looked
+// for that many units ahead, the later occurrence was missed and a later start answered ((?:b.{2,6})?x over "bxſſſſx"
+// from 1, not 0).
+func TestAWindowReachesAsManyCharactersAsItCounts(t *testing.T) {
+	patterns := []string{`(?:b.{2,6})?x`, `(?:[a-z][\s\S]{1,8})?xy`, `(?:\w[^a]{3,5})?x`, `(|([^a]|[^a][^a]){2,4}){2}(\3){3,5}?x`}
+	for _, pattern := range patterns {
+		literal := "x"
+		if strings.HasSuffix(pattern, "xy") {
+			literal = "xy"
+		}
+		for _, flags := range []string{"", "u"} {
+			searched, plain := searchedAndPlain(t, pattern, flags)
+			for _, wide := range []string{"\u017f", "\u00e9", "\u20ac", "\u4e2d", "\U0001F600", "a"} {
+				for k := 0; k <= 9; k++ {
+					text := "b" + literal + strings.Repeat(wide, k) + literal
+					where := fmt.Sprintf("/%s/%s on %q", pattern, flags, text)
+					if a, b := plain.FindAllStringIndex(text, -1), searched.FindAllStringIndex(text, -1); !equalSpans(a, b) {
+						t.Errorf("%s over UTF-8: %v, the plain search %v", where, b, a)
+					}
+					u := utf16Of(text)
+					a, _ := plain.TryFindAllUTF16Index(u, -1)
+					b, _ := searched.TryFindAllUTF16Index(u, -1)
+					if !equalSpans(a, b) {
+						t.Errorf("%s over UTF-16: %v, the plain search %v", where, b, a)
+					}
+				}
+			}
+		}
+	}
+}
+
 // TestALiteralWithARareByteIsFoundAsAnyOther: a literal with a byte rare in text is found by the search for that byte,
 // wherever in the literal it is.
 func TestALiteralWithARareByteIsFoundAsAnyOther(t *testing.T) {
