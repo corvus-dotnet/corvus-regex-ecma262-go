@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -27,7 +29,11 @@ func TestGettingStarted(t *testing.T) {
 		t.Fatal(err)
 	}
 	for n, block := range blocks {
-		t.Run("block-"+string(rune('1'+n)), func(t *testing.T) {
+		// A block that is not a whole program, such as the import of Setup, is not run.
+		if !strings.HasPrefix(string(block[1]), "package main\n") {
+			continue
+		}
+		t.Run("block-"+strconv.Itoa(n+1), func(t *testing.T) {
 			dir := t.TempDir()
 			mod := "module example\n\ngo 1.25\n\nrequire github.com/corvus-dotnet/corvus-regex-ecma262-go v0.0.0\n\n" +
 				"replace github.com/corvus-dotnet/corvus-regex-ecma262-go => " + root + "\n"
