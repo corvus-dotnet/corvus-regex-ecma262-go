@@ -13,6 +13,9 @@
 // replace and split. ill-formed-utf8.jsonl holds bytes that are not UTF-8, each one answer over UTF-8 under each
 // grammar the pattern is valid in, whose right answer is a refusal: the error of kind ErrEncoding.
 //
+// Each record is also asked of the grammar-only reader (ecmaregex.IsValidPatternOptions) in every grammar the record
+// names, valid or not, and its answer must be V8's (READER lines, and the "grammar-only reader" line of the report).
+//
 // exec/test262.jsonl, the exec calls of test262 (in a directory of its own), is judged last: each call one exec with
 // the record's flags from its lastIndex, right when the positions of the match and of every group, the named groups
 // and, with g or y, the lastIndex after are V8's; one answer over UTF-16 and, when the text holds no lone surrogate and
@@ -201,8 +204,40 @@ func main() {
 	fmt.Printf("records %d (skipped %d deviations)  right %d  wrong %d  refused-valid %d  accepted-invalid %d  limit %d  errors %d  in %.1fs\n",
 		records.Load(), skipped.Load(), total.right.Load(), total.wrong.Load(), total.refused.Load(),
 		total.accepted.Load(), total.limited.Load(), total.errors.Load(), time.Since(clock).Seconds())
-	if total.wrong.Load()+total.refused.Load()+total.accepted.Load()+total.errors.Load()+total.limited.Load() != 0 {
+	fmt.Printf("grammar-only reader: right %d  wrong %d\n", readerRight.Load(), readerWrong.Load())
+	if total.wrong.Load()+total.refused.Load()+total.accepted.Load()+total.errors.Load()+total.limited.Load()+
+		readerWrong.Load() != 0 {
 		os.Exit(1)
+	}
+}
+
+// readerRight and readerWrong count the answers of the grammar-only reader that agree with V8's on whether a pattern
+// is valid, and those that do not.
+var readerRight, readerWrong atomic.Int64
+
+// judgeReader asks the grammar-only reader whether the pattern is valid in each grammar of the record, as V8 answered.
+// It reads no limit of size, so its answer is the grammar's for a pattern of any size.
+func judgeReader(name string, r any, pattern string, wrong *[]string) {
+	flags := lossy(str(get(r, "flags")))
+	for _, m := range modes(r) {
+		modeFlags := flags + m.add
+		expectedValid := m.valid == true
+		valid := false
+		if f, err := ecmaregex.ParseFlags(modeFlags); err == nil {
+			opts := settings
+			opts.Flags = f
+			valid = ecmaregex.IsValidPatternOptions(pattern, opts)
+		}
+		if valid == expectedValid {
+			readerRight.Add(1)
+			continue
+		}
+		readerWrong.Add(1)
+		v8 := "not valid"
+		if expectedValid {
+			v8 = "valid"
+		}
+		*wrong = append(*wrong, "READER\t"+name+"\t/"+escape(utf16.Encode([]rune(pattern)))+"/"+modeFlags+"\tV8 says "+v8)
 	}
 }
 
@@ -345,6 +380,9 @@ func limitKind(err error) string {
 
 func judgeRecord(name string, r any, c *counts, wrong *[]string) {
 	pattern := lossy(str(get(r, "pattern")))
+	if name != exec {
+		judgeReader(name, r, pattern, wrong)
+	}
 	switch name {
 	case exec:
 		judgeExec(r, pattern, c, wrong)

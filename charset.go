@@ -361,6 +361,51 @@ func propertyPairs(u *ucd.UCD, expr string) ([]rune, bool) {
 	}
 }
 
+// hasProperty reports whether a property expression names a property, as propertySet would find it, without
+// building its set.
+func hasProperty(u *ucd.UCD, expr string) bool {
+	category := func(value string) bool {
+		name := categoryName(value)
+		return name != "" && u.HasCategory(name)
+	}
+	if name, value, ok := strings.Cut(expr, "="); ok {
+		switch name {
+		case "General_Category", "gc":
+			return category(value)
+		case "Script", "sc":
+			return u.HasScript(value)
+		case "Script_Extensions", "scx":
+			return u.HasScriptExtensions(value)
+		}
+		return false
+	}
+	if category(expr) {
+		return true
+	}
+	switch canonical := binaryName(expr); canonical {
+	case "":
+		return false
+	case "ASCII", "Any":
+		return true
+	default:
+		return u.HasBinary(canonical)
+	}
+}
+
+// hasStringProperty reports whether a name is that of a property of strings, as stringPropertyOf would find it,
+// without building it.
+func hasStringProperty(uc *unicodeData, name string) bool {
+	if name == "RGI_Emoji" {
+		return true
+	}
+	for _, row := range uc.strings {
+		if row[0] == name {
+			return true
+		}
+	}
+	return false
+}
+
 func categoryPairs(u *ucd.UCD, value string) ([]rune, bool) {
 	name := categoryName(value)
 	if name == "" {

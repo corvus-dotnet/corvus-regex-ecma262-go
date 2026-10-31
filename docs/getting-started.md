@@ -175,6 +175,16 @@ func main() {
 }
 ```
 
+`IsValid` reads a pattern as compiling it would, so a pattern over a limit of size is not valid there.
+`IsValidPattern` (and `IsValidPatternOptions`, with an edition and a version of Unicode) asks the grammar alone,
+allocates nothing for a pattern of ordinary size, and counts a pattern too large to compile as valid when its grammar
+is. It is the check for a JSON Schema `format: regex`.
+
+```go
+deep := strings.Repeat("(", 5000) + strings.Repeat(")", 5000)
+fmt.Println(ecmaregex.IsValid(deep, "u"), ecmaregex.IsValidPattern(deep, "u")) // false true
+```
+
 ## Matching
 
 The methods are named as `regexp`'s are, with the position as an argument (the `At` forms) where JavaScript keeps

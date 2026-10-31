@@ -27,6 +27,15 @@ byte offsets, as `regexp`'s are, and a group that did not take part is -1, -1.
 and V8's version of Unicode (`UnicodeDefault`, 17 today). `Options` overrides either, independently of the other and
 of the flags: `EditionES2020` is the grammar JSON Schema 2020-12 names, and `UnicodeVersion` is 13, 17, 18 or latest. Both are resolved when the pattern is compiled, so a match costs the same whatever they are.
 
+**Validity.** `IsValid` and `IsValidOptions` read a pattern as compiling it would, so a pattern over a limit of size
+is not valid there. `IsValidPattern` and `IsValidPatternOptions` ask the grammar alone, as the .NET engine's
+`IsValidPattern` and the Rust crate's `is_valid_pattern` do: a pattern too large to compile is valid there when its
+grammar is. They read the pattern in place (`validate.go`, the Rust crate's `validate.rs` in Go, which makes the
+parser's decision at each step), with the groups and the nested classes of the v flag on stacks of their own, so no
+pattern can overflow the stack, and they allocate nothing unless the groups nest more than 32 deep or there are more
+than 12 named groups. The data-set runner asks the reader about every record in every grammar and checks its answer
+against V8's. This is what a JSON Schema `format: regex` check needs: the grammar, whatever an engine's limits.
+
 **Errors.** `Compile` returns an `*Error` whose `Kind` is `ErrInvalid`, `ErrFlags` or `ErrTooLarge` (with a
 `*TooLargeError` naming the limit); `MustCompile` panics with it. A match that reaches its limit, and text that is not
 UTF-8, are errors too: the `Try` methods return them (`ErrTime`, `ErrMemory`, `ErrEncoding`), and the methods with

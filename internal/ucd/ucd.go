@@ -251,6 +251,38 @@ func (u *UCD) Category(name string) (Ranges, bool) {
 	return Ranges{built: built()}, true
 }
 
+// HasCategory reports whether Category has a table for the name, without building it.
+func (u *UCD) HasCategory(name string) bool {
+	switch name {
+	case "L", "LC", "M", "N", "P", "S", "Z", "C":
+		return true
+	}
+	return u.data.categoryTable(name) != nil
+}
+
+// HasBinary reports whether Binary has a table for the name, without building it.
+func (u *UCD) HasBinary(name string) bool {
+	return name == "Assigned" || u.data.binaryTable(name) != nil
+}
+
+// HasScript reports whether Script has a table for the name, without building it.
+func (u *UCD) HasScript(name string) bool {
+	switch name {
+	case "Unknown", "Zzzz", "Katakana_Or_Hiragana", "Hrkt":
+		return true
+	}
+	return u.data.scriptTable(name) != nil
+}
+
+// HasScriptExtensions reports whether ScriptExtensions has a table for the name, without building it.
+func (u *UCD) HasScriptExtensions(name string) bool {
+	switch name {
+	case "Unknown", "Zzzz", "Katakana_Or_Hiragana", "Hrkt":
+		return true
+	}
+	return u.data.scriptExtensionsTable(name) != nil
+}
+
 // Binary returns the table of a binary property by its canonical name, such as "Alphabetic" or "White_Space", and
 // false for any other name. ASCII and Any, which ECMA-262 adds to the properties of Unicode, are not here.
 func (u *UCD) Binary(name string) (Ranges, bool) {
