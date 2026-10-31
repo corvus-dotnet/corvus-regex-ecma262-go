@@ -32,8 +32,9 @@ is not valid there. `IsValidPattern` and `IsValidPatternOptions` ask the grammar
 `IsValidPattern` and the Rust crate's `is_valid_pattern` do: a pattern too large to compile is valid there when its
 grammar is. They read the pattern in place (`validate.go`, the Rust crate's `validate.rs` in Go, which makes the
 parser's decision at each step), with the groups and the nested classes of the v flag on stacks of their own, so no
-pattern can overflow the stack, and they allocate nothing unless the groups nest more than 32 deep or there are more
-than 12 named groups. The data-set runner asks the reader about every record in every grammar and checks its answer
+pattern can overflow the stack, and they allocate nothing unless the groups nest more than 64 deep, there are more than
+63 groups, or there are more than 12 named groups. A named group is kept as the disjunction and the alternative it lies
+in, so the memory is in proportion to the pattern however deeply named groups nest. The data-set runner asks the reader about every record in every grammar and checks its answer
 against V8's. This is what a JSON Schema `format: regex` check needs: the grammar, whatever an engine's limits.
 
 **Errors.** `Compile` returns an `*Error` whose `Kind` is `ErrInvalid`, `ErrFlags` or `ErrTooLarge` (with a

@@ -2,8 +2,10 @@ package ecmaregex
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestTheGrammarOnlyReaderAppliesNoLimitOfSize: a pattern over a limit of size is valid when its grammar is, and not
@@ -70,6 +72,10 @@ func TestTheGrammarOnlyReaderAgreesWithTheParser(t *testing.T) {
 		`[^[\q{ab}]]`, `[^[^\q{ab}]]`, `[[\q{ab}]&&a]`, `[^[\q{ab}]&&a]`, `[^a--\q{ab}]`, `[\q{ab}--a]`,
 		`[^\q{ab}--a]`, `[a&&]`, `[&&a]`, `[a!!b]`, `[\!]`, `[(]`, `[a-[b]]`, `[\q{a`, `(?i-i:a)`, `(?-:a)`,
 		`(?ii:a)`, `(?x:a)`, `(?i`, `(?<`, `(?<a`, `(?<a>`, `(?<=`, `a|*`, `\`, `[\`, `(`, `)`, `a)`, `\b+`,
+		`(?:(?<a>x))|(?<a>y)`, `(?:(?<a>x)|b)(?<a>y)`, `((?<a>x)|(?:(?<a>y)))`, `(?:(?<a>x)|(?:c))(?:d|(?<a>y))`,
+		`(?:(?:(?<a>x)))|(?:(?:(?<a>y)))|(?<a>z)`, `(?:(?:(?<a>x))|(?<b>y))(?<a>z)`, `(?:(?<a>x)|(?:(?<a>y)|(?<a>z)))`,
+		`(?:(?:(?<a>x)|y)|(?<a>z))`, `(?:(?:(?<a>x)|y)(?<a>z))`, `(?<a>x)|(?:(?:(?<b>y))(?<a>z))`,
+		`(?:(?:(?<a>x))(?:(?<b>y)))|(?<a>z)(?<b>w)`, `(?:(?<a>x))(?:(?<b>y)|(?<a>z))`,
 		`^*`, `$+`, `\B{2}`, `\xg`, `\x4`, `\-`, `[\-]`, `\/`, `\a`, `\_`, "😀{2}", "[😀-😁]", "[😁-😀]",
 	}
 	for _, p := range patterns {
@@ -98,7 +104,7 @@ func TestTheGrammarOnlyReaderAllocatesNothing(t *testing.T) {
 		fmt.Fprintf(&names, "(?<n%d>a)", n)
 	}
 	names.WriteString(`\k<n11>`)
-	nested := strings.Repeat("(?:", 30) + "a" + strings.Repeat(")", 30)
+	nested := strings.Repeat("(?:", 60) + "a" + strings.Repeat(")", 60)
 	cases := [][2]string{
 		{`^[a-z][a-z0-9_]{0,29}$`, "u"},
 		{`^(?<year>\d{4})-(?<month>\d{2})\k<year>$`, "u"},
@@ -112,6 +118,7 @@ func TestTheGrammarOnlyReaderAllocatesNothing(t *testing.T) {
 		{`(?<a>x)(?<a>y)`, "u"},
 		{names.String(), "u"},
 		{nested, "u"},
+		{strings.Repeat("(a)", 60), "u"},
 	}
 	opts := Options{Flags: Flags{Unicode: true}}
 	for _, c := range cases {
@@ -123,6 +130,43 @@ func TestTheGrammarOnlyReaderAllocatesNothing(t *testing.T) {
 		IsValidPatternOptions(c[0], opts)
 		if allocs := testing.AllocsPerRun(50, func() { IsValidPatternOptions(c[0], opts) }); allocs != 0 {
 			t.Errorf("/%s/%s: %v allocations", c[0], c[1], allocs)
+		}
+	}
+}
+
+// TestNamedGroupsAreReadInMemoryAndTimeInProportionToThePattern: each named group keeps the disjunction and the
+// alternative it lies in, not a copy of the path to it, so nested named groups take memory in proportion to their
+// number, not to its square. A name kept deep inside one alternative and used again in the next walks out of the closed
+// groups to the disjunction around both, and the walk is shortened as it goes, so each name does not walk the whole
+// depth again.
+func TestNamedGroupsAreReadInMemoryAndTimeInProportionToThePattern(t *testing.T) {
+	var nested, deep, again strings.Builder
+	for k := 0; k < 100000; k++ {
+		fmt.Fprintf(&nested, "(?<g%d>", k)
+	}
+	nested.WriteString("a" + strings.Repeat(")", 100000))
+	for k := 0; k < 20000; k++ {
+		fmt.Fprintf(&deep, "(?<n%d>a)", k)
+		fmt.Fprintf(&again, "(?<n%d>b)", k)
+	}
+	reused := strings.Repeat("(?:", 50000) + deep.String() + strings.Repeat(")", 50000) + "|" + again.String()
+	for _, c := range []struct {
+		pattern string
+		valid   bool
+	}{{nested.String(), true}, {reused, true}, {reused + "(?<n0>c)", false}} {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		start := time.Now()
+		if got := IsValidPattern(c.pattern, "u"); got != c.valid {
+			t.Errorf("a pattern of %d bytes: %v", len(c.pattern), got)
+		}
+		took := time.Since(start)
+		runtime.ReadMemStats(&after)
+		if bytes := after.TotalAlloc - before.TotalAlloc; bytes > uint64(64*len(c.pattern)) {
+			t.Errorf("%d bytes for a pattern of %d", bytes, len(c.pattern))
+		}
+		if took > 10*time.Second {
+			t.Errorf("%v for a pattern of %d", took, len(c.pattern))
 		}
 	}
 }

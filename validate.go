@@ -6,10 +6,12 @@ package ecmaregex
 //
 // It reads the pattern where it lies, decoding a character only where the grammar needs it. It keeps the groups and
 // the nested classes of the v flag on stacks of its own rather than recursing, so that no pattern can overflow the
-// stack, and it keeps a group name as its place in the pattern. Each stack starts on arrays of the caller's and moves
-// to the heap only beyond them, which takes groups nested more deeply than 32, or more than 12 named groups (or their
-// paths) at once. It asks the grammar only: the parser's limits of size (the length of the pattern, the nesting of
-// groups, the size it counts) belong to compiling a pattern, and none of them applies here.
+// stack, and it keeps a group name as its place in the pattern and a named group as the disjunction and the
+// alternative it lies in, never a copy of the path to it, so its memory is in proportion to the pattern however deeply
+// named groups nest. Each stack starts on arrays of the caller's and moves to the heap only beyond them, which takes
+// groups nested more deeply than 64, more than 63 groups, or more than 12 named groups. It asks the grammar only: the
+// parser's limits of size (the length of the pattern, the nesting of groups, the size it counts) belong to compiling a
+// pattern, and none of them applies here.
 //
 // Each method follows the method of the parser with the same name, and makes the same decision at each step. A
 // position is twice the index of a byte of the pattern, plus one for the second half of a character beyond the Basic
@@ -31,13 +33,15 @@ const (
 
 // A frame of a class of the v flag: whether it is negated, its phase, its operator, whether it may contain strings.
 const (
-	classFrame     = 4
-	phaseStart     = 0
-	phaseUnion     = 1
-	phaseOperands  = 2
-	waitingFirst   = 3
-	waitingUnion   = 4
-	waitingOperand = 5
+	classFrame = 4
+	// The entries of a disjunction in disjunctionTable.
+	disjunctionFrame = 4
+	phaseStart       = 0
+	phaseUnion       = 1
+	phaseOperands    = 2
+	waitingFirst     = 3
+	waitingUnion     = 4
+	waitingOperand   = 5
 )
 
 // What a class escape was.
@@ -68,16 +72,21 @@ type validator struct {
 	hasNames     bool
 	groupCount   int64
 	disjunctions int
-	// path is the alternatives that enclose the position, as disjunction and alternative (the parser's path).
+	// path is the disjunctions open at the position, outermost first (the parser's path, whose alternatives are in
+	// disjunctionTable).
 	path stack
 	// frames is the groups open at the position: the kind of each.
 	frames stack
-	// names holds each named group: the start and the end of its name, the start and the length of its path in
-	// namePaths, and the hash of its name.
-	names     stack
-	namePaths stack
-	// nameTable holds the places of the named groups by the hash of their names: one more than the place in names of
-	// the last group with each name (0 for none). Open addressing, a power of two long and at most half full.
+	// names holds each named group: the start and the end of its name, the disjunction and the alternative it lies
+	// directly in, and the hash of its name.
+	names stack
+	// disjunctionTable holds each disjunction, by its number from 1, as disjunctionFrame entries: the disjunction it lies
+	// in (0 for the pattern's own) and the alternative of that one it lies in, its own current alternative, and whether
+	// it is still open. A closed disjunction's first two entries may be moved on to an ancestor (see
+	// separateAlternatives).
+	disjunctionTable wideStack
+	// nameTable holds the places of the named groups by the hash of their names: one more than the place in names of the
+	// last group with each name (0 for none). Open addressing, a power of two long and at most half full.
 	nameTable     nameTable
 	distinctNames int
 	// references holds each named reference: the start and the end of its name.
@@ -135,6 +144,42 @@ func (s *stack) pop() int {
 	x := s.get(s.n - 1)
 	s.truncate(s.n - 1)
 	return x
+}
+
+// wideStack is a stack as stack is, with room in place for 256 integers.
+type wideStack struct {
+	inline [256]int
+	n      int
+	heap   []int
+}
+
+func (s *wideStack) push(x int) {
+	if s.heap == nil {
+		if s.n < len(s.inline) {
+			s.inline[s.n] = x
+			s.n++
+			return
+		}
+		s.heap = make([]int, s.n, 2*len(s.inline))
+		copy(s.heap, s.inline[:s.n])
+	}
+	s.heap = append(s.heap, x)
+	s.n++
+}
+
+func (s *wideStack) get(k int) int {
+	if s.heap != nil {
+		return s.heap[k]
+	}
+	return s.inline[k]
+}
+
+func (s *wideStack) set(k, x int) {
+	if s.heap != nil {
+		s.heap[k] = x
+	} else {
+		s.inline[k] = x
+	}
 }
 
 // nameTable is the table of names, in place until it outgrows 32 slots.
@@ -250,7 +295,8 @@ func (v *validator) validate() bool {
 		c := v.peek()
 		if c == '|' {
 			v.next()
-			v.path.set(v.path.n-1, v.path.get(v.path.n-1)+1)
+			at := frame(v.path.get(v.path.n - 1))
+			v.disjunctionTable.set(at+2, v.disjunctionTable.get(at+2)+1)
 			continue
 		}
 		if c == ')' {
@@ -259,7 +305,7 @@ func (v *validator) validate() bool {
 				return false
 			}
 			v.next()
-			v.path.truncate(v.path.n - 2)
+			v.disjunctionTable.set(frame(v.path.pop())+3, 0)
 			kind := v.frames.pop()
 			// Annex B lets a quantifier follow a lookahead. The u flag does not, and neither lets one follow a
 			// lookbehind.
@@ -302,8 +348,15 @@ func (v *validator) validate() bool {
 
 func (v *validator) pushDisjunction() {
 	v.disjunctions++
+	up, upAlternative := 0, 0
+	if v.path.n > 0 {
+		up = v.path.get(v.path.n - 1)
+		upAlternative = v.disjunctionTable.get(frame(up) + 2)
+	}
+	for _, x := range [...]int{up, upAlternative, 0, 1} {
+		v.disjunctionTable.push(x)
+	}
 	v.path.push(v.disjunctions)
-	v.path.push(0)
 }
 
 // scanGroups counts the capturing groups of the pattern and notes whether any is named.
@@ -512,11 +565,10 @@ func (v *validator) groupOrLook() int {
 		}
 	}
 	entry := v.names.n
-	for _, x := range [...]int{start, stop, v.namePaths.n, v.path.n, hash} {
+	disjunction := v.path.get(v.path.n - 1)
+	alternative := v.disjunctionTable.get(frame(disjunction) + 2)
+	for _, x := range [...]int{start, stop, disjunction, alternative, hash} {
 		v.names.push(x)
-	}
-	for k := 0; k < v.path.n; k++ {
-		v.namePaths.push(v.path.get(k))
 	}
 	if found {
 		v.nameTable.set(slot, entry+1)
@@ -526,19 +578,28 @@ func (v *validator) groupOrLook() int {
 	return kindGroup
 }
 
-// separateAlternatives reports whether a named group (by the start and the length of its path) and the current
-// position lie in different alternatives of some disjunction.
-func (v *validator) separateAlternatives(otherStart, otherLen int) bool {
-	for k := 0; k+1 < otherLen && k+1 < v.path.n; k += 2 {
-		if v.namePaths.get(otherStart+k) != v.path.get(k) {
-			break
+// separateAlternatives reports whether a named group, by the disjunction and the alternative it lies directly in, and
+// the current position lie in different alternatives of some disjunction: of the innermost disjunction around the group
+// that is still open, which is the innermost around both. A disjunction never opens again once closed, so the walk out
+// of closed ones moves each one it passes on to its grandparent, and the walks take time in proportion to the pattern
+// in all.
+func (v *validator) separateAlternatives(disjunction, alternative int) bool {
+	t := &v.disjunctionTable
+	for t.get(frame(disjunction)+3) == 0 {
+		at := frame(disjunction)
+		up := frame(t.get(at))
+		if t.get(up+3) == 0 {
+			t.set(at, t.get(up))
+			t.set(at+1, t.get(up+1))
 		}
-		if v.namePaths.get(otherStart+k+1) != v.path.get(k+1) {
-			return true
-		}
+		alternative = t.get(at + 1)
+		disjunction = t.get(at)
 	}
-	return false
+	return t.get(frame(disjunction)+2) != alternative
 }
+
+// frame returns the place in disjunctionTable of a disjunction's entries.
+func frame(disjunction int) int { return (disjunction - 1) * disjunctionFrame }
 
 // modifierGroup reads the modifiers of a group such as (?i:...) or (?s-i:...), after the "(?", to its ':'.
 func (v *validator) modifierGroup() bool {
