@@ -324,8 +324,9 @@ func IsValidPattern(pattern, flags string) bool {
 // grammar of its edition and under its version of Unicode. It asks the grammar only: unlike IsValidOptions, which
 // reads the pattern as compiling it would, it does not apply this engine's limits of size (MaxPatternLength,
 // MaxNesting, MaxSize), so a pattern too large to compile is valid here. It reads the pattern in place with stacks of
-// its own, so no pattern can overflow the stack, and it allocates nothing unless the pattern's groups nest more than
-// 32 deep or it has more than 12 named groups. The u and v flags choose the grammar, and the others do not change it.
+// its own, so no pattern can overflow the stack, its memory is in proportion to the pattern, and it allocates nothing
+// unless the pattern's groups nest more than 64 deep, it has more than 63 groups, or it has more than 12 named groups.
+// The u and v flags choose the grammar, and the others do not change it.
 // It is false for a string that is not UTF-8, and when the flags and the edition are not valid together. The match
 // timeout is not read.
 func IsValidPatternOptions(pattern string, opts Options) bool {
